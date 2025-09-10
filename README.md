@@ -25,9 +25,31 @@ To build the project:
 
 ## Running the Bot Locally
 
+### Prerequisites
+
+1. **Install diesel_cli with SQLite support:**
+   ```bash
+   cargo install diesel_cli --no-default-features --features sqlite
+   ```
+
+2. **Create local directory and configuration:**
+   ```bash
+   mkdir local
+   cp config.example.yaml local/config.yaml
+   ```
+
+3. **Set up the database:**
+   ```bash
+   cd local
+   diesel migration run --database-url sqlite:db.sqlite3 --migration-dir ../migrations
+   cd ..
+   ```
+
+### Bot Setup
+
 1. Use [@BotFather](https://t.me/BotFather) to create a new Telegram bot, create a test chat with topics, and add the bot as an administrator.
-2. Copy [`config.example.yaml`](./config.example.yaml) and adjust it as needed, particularly the `telegram.token`.
-3. Start the bot with `cargo run bot my-config.yaml`.
+2. Edit `local/config.yaml` and adjust it as needed, particularly the `telegram.token`.
+3. Start the bot with `cargo run bot local/config.yaml`.
 
 ## Development Conventions
 
