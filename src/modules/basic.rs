@@ -24,6 +24,7 @@ use crate::common::{
 };
 use crate::db::{DbChatId, DbUserId};
 use crate::utils::{write_message_link, BotExt};
+use crate::utils::mikrotik::get_leases;
 use crate::{models, schema};
 
 #[derive(Clone, BotCommands, BotCommandsExt!)]
@@ -258,6 +259,43 @@ async fn cmd_status(
     msg: Message,
     state: Arc<RwLock<State>>,
 ) -> Result<()> {
+    // Log on-demand debug info and trigger an immediate Mikrotik check in background
+    {
+        let who = msg
+            .from
+            .as_ref()
+            .map(|u| format!("{}:{}", u.id.0, u.username.clone().unwrap_or_default()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let chat = msg.chat.id.0;
+        let active_count = (*state.read().await)
+            .active_users()
+            .map(|s| s.len())
+            .unwrap_or(0);
+        log::info!(
+            "/status requested by user={who} chat={chat} active_users={active_count}"
+        );
+    }
+
+    {
+        let env = Arc::clone(&env);
+        tokio::spawn(async move {
+            log::debug!("/status: triggering immediate Mikrotik leases fetch");
+            match get_leases(&env.reqwest_client, &env.config.services.mikrotik)
+                .await
+            {
+                Ok(leases) => {
+                    log::info!(
+                        "/status: Mikrotik fetch ok: leases_count={}",
+                        leases.len()
+                    );
+                }
+                Err(e) => {
+                    log::error!("/status: Mikrotik fetch failed: {e}");
+                }
+            }
+        });
+    }
+
     let text = cmd_status_text(&env, &state).await?;
 
     bot.reply_message(&msg, text)
