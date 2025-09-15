@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::config::Mikrotik;
+use crate::config::{Mikrotik, MikrotikScheme};
 
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
@@ -67,18 +67,24 @@ pub async fn get_leases(
         }
     }
 
-    // Try HTTPS first, then fall back to HTTP (some RouterOS setups disable HTTPS)
-    let leases_https = attempt(reqwest_client, conf, "https").await;
-    if let Err(ref e) = leases_https {
-        log::warn!(
-            "Mikrotik https request failed, retrying over http: host={} err={}",
-            conf.host,
-            e
-        );
-    }
-    let leases = match leases_https {
-        Ok(v) => Ok(v),
-        Err(_e_https) => attempt(reqwest_client, conf, "http").await,
+    let leases = match conf.scheme {
+        MikrotikScheme::Https => attempt(reqwest_client, conf, "https").await,
+        MikrotikScheme::Http => attempt(reqwest_client, conf, "http").await,
+        MikrotikScheme::Auto => {
+            // Try HTTPS first, then fall back to HTTP (some RouterOS setups disable HTTPS)
+            let leases_https = attempt(reqwest_client, conf, "https").await;
+            if let Err(ref e) = leases_https {
+                log::warn!(
+                    "Mikrotik https request failed, retrying over http: host={} err={}",
+                    conf.host,
+                    e
+                );
+            }
+            match leases_https {
+                Ok(v) => Ok(v),
+                Err(_e_https) => attempt(reqwest_client, conf, "http").await,
+            }
+        }
     };
 
     crate::metrics::update_service("mikrotik", leases.is_ok());
