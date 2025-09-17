@@ -41,15 +41,69 @@ To build the project:
 3. **Set up the database:**
    ```bash
    cd local
-   diesel migration run --database-url sqlite:db.sqlite3 --migration-dir ../migrations
-   cd ..
+   diesel migration run --database-url db.sqlite3 --migration-dir ../migrations
    ```
 
 ### Bot Setup
 
 1. Use [@BotFather](https://t.me/BotFather) to create a new Telegram bot, create a test chat with topics, and add the bot as an administrator.
 2. Edit `local/config.yaml` and adjust it as needed, particularly the `telegram.token`.
-3. Start the bot with `cargo run bot local/config.yaml`.
+
+### Running the Bot
+
+To start the bot, run from the `local` directory:
+```bash
+cd local
+cargo run bot ./config.yaml
+```
+
+Alternatively, you can build and run the release version:
+```bash
+cargo build --release
+cd local
+../target/release/f0bot bot ./config.yaml
+```
+
+Or using the Nix build:
+```bash
+nix build
+cd local
+../result/bin/f0bot bot ./config.yaml
+```
+
+## Development
+
+### Linting and Code Quality
+
+This project uses several tools to maintain code quality and consistency. Run the following command to check all linting rules and run tests:
+
+```bash
+just check
+```
+
+This command performs:
+- **Nix linting**: `deadnix` and `statix` for Nix expressions
+- **Python linting**: `mypy` type checking and `ruff` linting
+- **Rust linting**: `cargo clippy` with strict warnings enabled
+- **Tests**: Full Rust test suite
+
+### Code Formatting
+
+To format all code in the project:
+
+```bash
+just fmt
+```
+
+This formats Rust, Nix, Python, YAML, JSON, Markdown, and TypeScript files.
+
+### Database Schema
+
+To regenerate the database schema after migrations:
+
+```bash
+just schema
+```
 
 ## Development Conventions
 

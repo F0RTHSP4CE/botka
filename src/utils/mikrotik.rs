@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::config::Mikrotik;
+use crate::config::{Mikrotik, MikrotikScheme};
 
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
@@ -14,20 +14,77 @@ pub async fn get_leases(
     reqwest_client: &reqwest::Client,
     conf: &Mikrotik,
 ) -> Result<Vec<Lease>, reqwest::Error> {
-    let leases = reqwest_client
-        .post(format!("https://{}/rest/ip/dhcp-server/lease/print", conf.host))
-        .timeout(Duration::from_secs(5))
-        .basic_auth(&conf.username, Some(&conf.password))
-        .json(&serde_json::json!({
-            ".proplist": [
-                "mac-address",
-                "last-seen",
-            ]
-        }))
-        .send()
-        .await?
-        .json::<Vec<Lease>>()
-        .await;
+    async fn attempt(
+        client: &reqwest::Client,
+        conf: &Mikrotik,
+        scheme: &str,
+    ) -> Result<Vec<Lease>, reqwest::Error> {
+        // Preserve legacy behavior: POST to /print with .proplist
+        let url =
+            format!("{scheme}://{}/rest/ip/dhcp-server/lease/print", conf.host);
+        let request = client
+            .post(url)
+            .timeout(Duration::from_secs(5))
+            .basic_auth(&conf.username, Some(&conf.password))
+            .json(&serde_json::json!({
+                ".proplist": ["mac-address", "last-seen"],
+            }));
+        match request.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if !status.is_success() {
+                    // Convert to reqwest::Error preserving status, then log details
+                    let err = resp.error_for_status().unwrap_err();
+                    log::error!(
+                        "Mikrotik HTTP status error: scheme={scheme} host={} status={} url={}",
+                        conf.host,
+                        status.as_u16(),
+                        err.url().map_or("<none>", |u| u.as_str())
+                    );
+                    return Err(err);
+                }
+                resp.json::<Vec<Lease>>().await
+            }
+            Err(err) => {
+                // Network / TLS / timeout errors
+                let mut source_chain = String::new();
+                let mut cur: &(dyn std::error::Error + 'static) = &err;
+                while let Some(src) = cur.source() {
+                    use std::fmt::Write as _;
+                    let _ = write!(source_chain, " -> {src}");
+                    cur = src;
+                }
+                log::error!(
+                    "Mikrotik request error: scheme={scheme} host={} err={}{}",
+                    conf.host,
+                    err,
+                    source_chain
+                );
+                Err(err)
+            }
+        }
+    }
+
+    let leases = match conf.scheme {
+        MikrotikScheme::Https => attempt(reqwest_client, conf, "https").await,
+        MikrotikScheme::Http => attempt(reqwest_client, conf, "http").await,
+        MikrotikScheme::Auto => {
+            // Try HTTPS first, then fall back to HTTP (some RouterOS setups disable HTTPS)
+            let leases_https = attempt(reqwest_client, conf, "https").await;
+            if let Err(ref e) = leases_https {
+                log::warn!(
+                    "Mikrotik https request failed, retrying over http: host={} err={}",
+                    conf.host,
+                    e
+                );
+            }
+            match leases_https {
+                Ok(v) => Ok(v),
+                Err(_e_https) => attempt(reqwest_client, conf, "http").await,
+            }
+        }
+    };
+
     crate::metrics::update_service("mikrotik", leases.is_ok());
     leases
 }

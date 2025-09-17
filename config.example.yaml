@@ -83,6 +83,11 @@ services:
     host: 10.0.0.1
     username: SECRET
     password: SECRET
+    # Connection scheme: one of [auto, https, http].
+    # - auto: try HTTPS first, then fall back to HTTP
+    # - https: use HTTPS only
+    # - http: use HTTP only
+    scheme: auto
 
   # Home Assistant configuration.
   # FIXME: currently unused

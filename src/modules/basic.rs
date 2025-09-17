@@ -6,6 +6,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use diesel::prelude::*;
@@ -23,6 +24,7 @@ use crate::common::{
     TopicEmojis, UpdateHandler,
 };
 use crate::db::{DbChatId, DbUserId};
+use crate::utils::mikrotik::get_leases;
 use crate::utils::{write_message_link, BotExt};
 use crate::{models, schema};
 
@@ -53,6 +55,9 @@ pub enum Commands {
 
     #[command(description = "show bot version.")]
     Version,
+
+    #[command(description = "count devices online (Mikrotik)")]
+    Count,
 }
 
 pub fn command_handler() -> UpdateHandler {
@@ -82,6 +87,7 @@ async fn start(
             bot.reply_message(&msg, crate::version()).await?;
         }
         Commands::Topics => cmd_topics(bot, env, msg).await?,
+        Commands::Count => cmd_count(bot, env, msg).await?,
     }
     Ok(())
 }
@@ -100,6 +106,36 @@ async fn cmd_help(bot: Bot, msg: Message) -> Result<()> {
     bot.reply_message(&msg, text)
         .parse_mode(teloxide::types::ParseMode::Html)
         .await?;
+    Ok(())
+}
+
+async fn cmd_count(bot: Bot, env: Arc<BotEnv>, msg: Message) -> Result<()> {
+    bot.send_chat_action(msg.chat.id, teloxide::types::ChatAction::Typing)
+        .await?;
+
+    match get_leases(&env.reqwest_client, &env.config.services.mikrotik).await {
+        Ok(leases) => {
+            let total = leases.len();
+            let active_20m = leases
+                .iter()
+                .filter(|l| l.last_seen < Duration::from_secs(20 * 60))
+                .count();
+            log::info!(
+                "/count: leases total={total} active(<20m)={active_20m}"
+            );
+            bot.reply_message(
+                &msg,
+                format!("Devices online: {active_20m} (total leases: {total})"),
+            )
+            .await?;
+        }
+        Err(e) => {
+            log::error!("/count: Mikrotik fetch failed: {e}");
+            bot.reply_message(&msg, format!("Failed to fetch count: {e}"))
+                .await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -258,6 +294,42 @@ async fn cmd_status(
     msg: Message,
     state: Arc<RwLock<State>>,
 ) -> Result<()> {
+    // Log on-demand debug info and trigger an immediate Mikrotik check in background
+    {
+        let who = msg.from.as_ref().map_or_else(
+            || "unknown".to_string(),
+            |u| {
+                format!("{}:{}", u.id.0, u.username.clone().unwrap_or_default())
+            },
+        );
+        let chat = msg.chat.id.0;
+        let active_count =
+            (*state.read().await).active_users().map_or(0, |s| s.len());
+        log::info!(
+            "/status requested by user={who} chat={chat} active_users={active_count}"
+        );
+    }
+
+    {
+        let env = Arc::clone(&env);
+        tokio::spawn(async move {
+            log::debug!("/status: triggering immediate Mikrotik leases fetch");
+            match get_leases(&env.reqwest_client, &env.config.services.mikrotik)
+                .await
+            {
+                Ok(leases) => {
+                    log::info!(
+                        "/status: Mikrotik fetch ok: leases_count={}",
+                        leases.len()
+                    );
+                }
+                Err(e) => {
+                    log::error!("/status: Mikrotik fetch failed: {e}");
+                }
+            }
+        });
+    }
+
     let text = cmd_status_text(&env, &state).await?;
 
     bot.reply_message(&msg, text)
