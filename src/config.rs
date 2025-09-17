@@ -96,7 +96,7 @@ pub struct Mikrotik {
     pub host: String,
     pub username: String,
     pub password: String,
-    /// Connection scheme to use for RouterOS REST API.
+    /// Connection scheme to use for `RouterOS` REST API.
     /// "auto" tries HTTPS first, then falls back to HTTP.
     #[serde(default = "default_mikrotik_scheme")]
     pub scheme: MikrotikScheme,

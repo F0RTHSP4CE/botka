@@ -24,8 +24,8 @@ use crate::common::{
     TopicEmojis, UpdateHandler,
 };
 use crate::db::{DbChatId, DbUserId};
-use crate::utils::{write_message_link, BotExt};
 use crate::utils::mikrotik::get_leases;
+use crate::utils::{write_message_link, BotExt};
 use crate::{models, schema};
 
 #[derive(Clone, BotCommands, BotCommandsExt!)]
@@ -121,13 +121,12 @@ async fn cmd_count(bot: Bot, env: Arc<BotEnv>, msg: Message) -> Result<()> {
                 .filter(|l| l.last_seen < Duration::from_secs(20 * 60))
                 .count();
             log::info!(
-                "/count: leases total={} active(<20m)={}",
-                total, active_20m
+                "/count: leases total={total} active(<20m)={active_20m}"
             );
-            bot.reply_message(&msg, format!(
-                "Devices online: {} (total leases: {})",
-                active_20m, total
-            ))
+            bot.reply_message(
+                &msg,
+                format!("Devices online: {active_20m} (total leases: {total})"),
+            )
             .await?;
         }
         Err(e) => {
@@ -297,16 +296,15 @@ async fn cmd_status(
 ) -> Result<()> {
     // Log on-demand debug info and trigger an immediate Mikrotik check in background
     {
-        let who = msg
-            .from
-            .as_ref()
-            .map(|u| format!("{}:{}", u.id.0, u.username.clone().unwrap_or_default()))
-            .unwrap_or_else(|| "unknown".to_string());
+        let who = msg.from.as_ref().map_or_else(
+            || "unknown".to_string(),
+            |u| {
+                format!("{}:{}", u.id.0, u.username.clone().unwrap_or_default())
+            },
+        );
         let chat = msg.chat.id.0;
-        let active_count = (*state.read().await)
-            .active_users()
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let active_count =
+            (*state.read().await).active_users().map_or(0, |s| s.len());
         log::info!(
             "/status requested by user={who} chat={chat} active_users={active_count}"
         );

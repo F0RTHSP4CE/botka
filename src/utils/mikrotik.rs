@@ -20,10 +20,8 @@ pub async fn get_leases(
         scheme: &str,
     ) -> Result<Vec<Lease>, reqwest::Error> {
         // Preserve legacy behavior: POST to /print with .proplist
-        let url = format!(
-            "{scheme}://{}/rest/ip/dhcp-server/lease/print",
-            conf.host
-        );
+        let url =
+            format!("{scheme}://{}/rest/ip/dhcp-server/lease/print", conf.host);
         let request = client
             .post(url)
             .timeout(Duration::from_secs(5))
@@ -53,7 +51,7 @@ pub async fn get_leases(
                 let mut cur: &(dyn std::error::Error + 'static) = &err;
                 while let Some(src) = cur.source() {
                     use std::fmt::Write as _;
-                    let _ = write!(source_chain, " -> {}", src);
+                    let _ = write!(source_chain, " -> {src}");
                     cur = src;
                 }
                 log::error!(
