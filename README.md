@@ -71,6 +71,40 @@ cd local
 ../result/bin/f0bot bot ./config.yaml
 ```
 
+## Development
+
+### Linting and Code Quality
+
+This project uses several tools to maintain code quality and consistency. Run the following command to check all linting rules and run tests:
+
+```bash
+just check
+```
+
+This command performs:
+- **Nix linting**: `deadnix` and `statix` for Nix expressions
+- **Python linting**: `mypy` type checking and `ruff` linting
+- **Rust linting**: `cargo clippy` with strict warnings enabled
+- **Tests**: Full Rust test suite
+
+### Code Formatting
+
+To format all code in the project:
+
+```bash
+just fmt
+```
+
+This formats Rust, Nix, Python, YAML, JSON, Markdown, and TypeScript files.
+
+### Database Schema
+
+To regenerate the database schema after migrations:
+
+```bash
+just schema
+```
+
 ## Development Conventions
 
 This project follows these conventions:
