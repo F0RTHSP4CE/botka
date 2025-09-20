@@ -71,6 +71,61 @@ cd local
 ../result/bin/f0bot bot ./config.yaml
 ```
 
+## Bot Commands
+
+### Basic Commands
+- `/help` - Display all available commands
+- `/status` - Show bot status
+- `/version` - Show bot version
+- `/topics` - Show topic list (private chat only)
+- `/count` - Count devices online (via Mikrotik)
+
+### Resident Commands (*)
+These commands are available only to residents:
+
+#### General
+- `/residents` - List current residents
+- `/residents_admin_table` - Show residents admin table
+- `/residents_timeline` - Show residents timeline
+
+#### Shopping List
+- `/needs` - Show shopping list
+- `/need <item>` - Add an item to the shopping list
+
+#### User Control
+- `/userctl` - Control personal configuration
+  - `--add-mac XX:XX:XX:XX:XX:XX` - Add MAC address for presence detection
+  - `--remove-mac XX:XX:XX:XX:XX:XX` - Remove MAC address
+  - `--help` - Show userctl command help
+- `/add_ssh <public_key>` - Add an SSH public key for yourself
+- `/get_ssh <username>` - Get SSH public keys of a user by username
+
+#### LDAP Integration
+- `/ldap_register <args>` - Register in LDAP system
+- `/ldap_reset_password` - Reset your LDAP password
+- `/ldap_update <args>` - Update LDAP settings
+
+#### Utilities
+- `/tldr` - Summarize long discussion (TL;DR)
+- `/racovina` - Show racovina camera image (in resident chat)
+- `/hlam` - Show hlam camera image (in resident chat)
+- `/open` - Open the door
+- `/temp_open` - Generate a temporary guest door access link
+
+### Admin Commands (**)
+These commands are available only to bot technicians/admins:
+
+- `/add_resident <username|ID>` - Add a user as a resident
+- `/remove_resident <username|ID>` - Remove a user from residents
+- `/broadcast` - Broadcast a message to all residents (use as a reply to the message you want to send)
+- `/debug_update_dashboard <args>` - Debug dashboard update
+
+### Notes
+- Commands marked with * are available only to residents
+- Commands marked with ** are available only to bot technicians/admins
+- The bot supports various internal features like MAC address monitoring for presence detection
+- For more details on specific commands, use the command with `--help` flag where available
+
 ## Development
 
 ### Linting and Code Quality

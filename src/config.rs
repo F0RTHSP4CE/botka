@@ -112,7 +112,7 @@ pub enum MikrotikScheme {
 
 #[allow(clippy::unnecessary_wraps)]
 const fn default_mikrotik_scheme() -> MikrotikScheme {
-    MikrotikScheme::Auto
+    MikrotikScheme::Http
 }
 
 #[derive(Serialize, Deserialize, Debug)]

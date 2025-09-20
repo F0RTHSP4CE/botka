@@ -101,8 +101,16 @@ async fn cmd_help(bot: Bot, msg: Message) -> Result<()> {
     text.push_str(&commands_help::<crate::modules::camera::Commands>());
     text.push_str(&commands_help::<crate::modules::ldap::Commands>());
     text.push_str(&commands_help::<crate::modules::butler::Commands>());
+    text.push_str(&commands_help::<crate::modules::tldr::Commands>());
+    text.push_str(&commands_help::<crate::modules::broadcast::Commands>());
+
+    text.push_str("\n<b>Advanced /userctl options:</b>\n");
+    text.push_str("• <code>/userctl --add-mac XX:XX:XX:XX:XX:XX</code> - add MAC address\n");
+    text.push_str("• <code>/userctl --remove-mac XX:XX:XX:XX:XX:XX</code> - remove MAC address\n");
+    text.push_str("• <code>/userctl --help</code> - show userctl help\n");
+
     text.push_str("\nCommands marked with * are available only to residents.");
-    // "..., and with ** are available only to bot technicians."
+    text.push_str("\nCommands marked with ** are available only to bot technicians/admins.");
     bot.reply_message(&msg, text)
         .parse_mode(teloxide::types::ParseMode::Html)
         .await?;
