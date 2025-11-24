@@ -8,3 +8,4 @@ result
 result-*
 /*_cache/
 *.sqlite3*
+.DS_Store
