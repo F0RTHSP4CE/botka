@@ -45,23 +45,7 @@ pub async fn get_leases(
                 }
                 resp.json::<Vec<Lease>>().await
             }
-            Err(err) => {
-                // Network / TLS / timeout errors
-                let mut source_chain = String::new();
-                let mut cur: &(dyn std::error::Error + 'static) = &err;
-                while let Some(src) = cur.source() {
-                    use std::fmt::Write as _;
-                    let _ = write!(source_chain, " -> {src}");
-                    cur = src;
-                }
-                log::error!(
-                    "Mikrotik request error: scheme={scheme} host={} err={}{}",
-                    conf.host,
-                    err,
-                    source_chain
-                );
-                Err(err)
-            }
+            Err(err) => Err(err),
         }
     }
 
@@ -71,13 +55,6 @@ pub async fn get_leases(
         MikrotikScheme::Auto => {
             // Try HTTPS first, then fall back to HTTP (some RouterOS setups disable HTTPS)
             let leases_https = attempt(reqwest_client, conf, "https").await;
-            if let Err(ref e) = leases_https {
-                log::warn!(
-                    "Mikrotik https request failed, retrying over http: host={} err={}",
-                    conf.host,
-                    e
-                );
-            }
             match leases_https {
                 Ok(v) => Ok(v),
                 Err(_e_https) => attempt(reqwest_client, conf, "http").await,
