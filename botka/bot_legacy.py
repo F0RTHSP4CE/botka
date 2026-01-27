@@ -1,51 +1,46 @@
-"""Main bot application entry point with Dishka dependency injection."""
+"""Main bot application entry point."""
 
 import asyncio
 import logging
-import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
-from dishka import make_async_container, AsyncContainer
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, AsyncEngine
 from telegram import Update, User
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    CallbackQueryHandler,
+    ChatMemberHandler,
+    MessageHandler,
+    filters,
 )
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import __version__
 from .config import Config, load_config
-from .db import Base, TgUser, Resident, UserMac, NeededItem
-from .providers import (
-    ConfigProvider,
-    HttpClientProvider,
-    DatabaseProvider,
-    SessionProvider,
-    StateProvider,
-    ServiceProvider,
-    ActiveUsers,
+from .db import (
+    TgUser,
+    Resident,
+    UserMac,
+    NeededItem,
+    init_db,
+    get_session,
 )
-from .di_services import (
-    ResidentService,
-    UserService,
-    NeedsService,
-    MikrotikService,
-    CameraService,
-    ButlerService,
-)
-from .dishka_integration import setup_dishka, inject, get_container
-from .services import get_mikrotik_leases
+from .services import get_mikrotik_leases, get_camera_image, open_door
 
 # Import modules
 from .modules import (
+    basic,
+    needs,
     butler,
     camera,
     userctl,
+    mac_monitoring,
+    resident_tracker,
     broadcast,
     polls,
     borrowed_items,
@@ -64,48 +59,38 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# Global container and state provider (for background tasks and legacy module support)
-_container: Optional[AsyncContainer] = None
-_state_provider: Optional[StateProvider] = None
-
-
-# =============================================================================
-# Legacy compatibility layer for modules that haven't been migrated to DI
-# =============================================================================
-
+# Global state
 class BotState:
-    """Legacy global bot state for backward compatibility with modules."""
+    """Global bot state."""
 
     def __init__(self):
         self.config: Optional[Config] = None
         self.http_client: Optional[httpx.AsyncClient] = None
-        self.active_users: set[int] = set()
+        self.active_users: set[int] = set()  # Set of user IDs currently at space
 
 
 state = BotState()
 
 
+# Helper functions
 async def is_resident(user_id: int) -> bool:
-    """Check if user is a current resident (legacy helper for modules)."""
-    if _container:
-        async with _container() as request_container:
-            service = await request_container.get(ResidentService)
-            return await service.is_resident(user_id)
-    return False
+    """Check if user is a current resident."""
+    async with await get_session() as session:
+        result = await session.execute(
+            select(Resident).where(
+                and_(Resident.tg_id == user_id, Resident.end_date.is_(None))
+            )
+        )
+        return result.scalar_one_or_none() is not None
 
 
 async def is_admin(user_id: int) -> bool:
-    """Check if user is a bot admin (legacy helper for modules)."""
-    if _container:
-        config = await _container.get(Config)
-        return user_id in config.telegram.admins
-    if state.config:
-        return user_id in state.config.telegram.admins
-    return False
+    """Check if user is a bot admin."""
+    return user_id in state.config.telegram.admins
 
 
 async def get_or_create_user(session: AsyncSession, user: User) -> TgUser:
-    """Get or create a TgUser record (legacy helper for modules)."""
+    """Get or create a TgUser record."""
     result = await session.execute(select(TgUser).where(TgUser.id == user.id))
     db_user = result.scalar_one_or_none()
 
@@ -119,6 +104,7 @@ async def get_or_create_user(session: AsyncSession, user: User) -> TgUser:
         session.add(db_user)
         await session.commit()
     else:
+        # Update user info
         db_user.username = user.username
         db_user.first_name = user.first_name
         db_user.last_name = user.last_name
@@ -126,10 +112,6 @@ async def get_or_create_user(session: AsyncSession, user: User) -> TgUser:
 
     return db_user
 
-
-# =============================================================================
-# Utility functions
-# =============================================================================
 
 def format_user(user: User) -> str:
     """Format user for display."""
@@ -141,15 +123,8 @@ def format_user(user: User) -> str:
     return name
 
 
-# =============================================================================
-# Command handlers with dependency injection
-# =============================================================================
-
-@inject
-async def cmd_help(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
+# Command handlers
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display available commands."""
     help_text = """<b>Available commands:</b>
 
@@ -176,23 +151,14 @@ Commands marked with * are available only to residents.
     await update.message.reply_text(help_text, parse_mode="HTML")
 
 
-@inject
-async def cmd_version(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
+async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show bot version."""
     await update.message.reply_text(f"F0RTHSP4CE Bot (Python) v{__version__}")
 
 
-@inject
-async def cmd_status(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    active_users: ActiveUsers,
-) -> None:
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show bot status."""
-    active_count = len(active_users)
+    active_count = len(state.active_users)
     status_text = f"""<b>Bot Status</b>
 
 Active users at space: {active_count}
@@ -201,23 +167,21 @@ Version: {__version__}
     await update.message.reply_text(status_text, parse_mode="HTML")
 
 
-@inject
-async def cmd_count(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    mikrotik_service: MikrotikService,
-) -> None:
+async def cmd_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Count devices online via Mikrotik."""
-    if not mikrotik_service.is_configured:
+    if not state.config.services.mikrotik:
         await update.message.reply_text("Mikrotik is not configured.")
         return
 
     await update.message.chat.send_action("typing")
 
     try:
-        leases = await mikrotik_service.get_leases()
+        leases = await get_mikrotik_leases(
+            state.http_client,
+            state.config.services.mikrotik,
+        )
         total = len(leases)
-        active = sum(1 for lease in leases if lease.last_seen < timedelta(minutes=20))
+        active = sum(1 for l in leases if l.last_seen < timedelta(minutes=20))
         await update.message.reply_text(
             f"Devices online: {active} (total leases: {total})"
         )
@@ -226,19 +190,21 @@ async def cmd_count(
         await update.message.reply_text(f"Failed to fetch count: {e}")
 
 
-@inject
-async def cmd_residents(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-) -> None:
+async def cmd_residents(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List current residents."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
-    rows = await resident_service.get_residents()
+    async with await get_session() as session:
+        result = await session.execute(
+            select(Resident, TgUser)
+            .outerjoin(TgUser, Resident.tg_id == TgUser.id)
+            .where(Resident.end_date.is_(None))
+            .order_by(Resident.begin_date.desc())
+        )
+        rows = result.all()
 
     if not rows:
         await update.message.reply_text("No residents found.")
@@ -260,20 +226,21 @@ async def cmd_residents(
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-@inject
-async def cmd_needs(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    needs_service: NeedsService,
-) -> None:
+async def cmd_needs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show shopping list."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
-    rows = await needs_service.get_needs()
+    async with await get_session() as session:
+        result = await session.execute(
+            select(NeededItem, TgUser)
+            .outerjoin(TgUser, NeededItem.request_user_id == TgUser.id)
+            .where(NeededItem.buyer_user_id.is_(None))
+            .order_by(NeededItem.rowid)
+        )
+        rows = result.all()
 
     if not rows:
         await update.message.reply_text("No items needed. 🎉")
@@ -287,17 +254,10 @@ async def cmd_needs(
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-@inject
-async def cmd_need(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    needs_service: NeedsService,
-    user_service: UserService,
-) -> None:
+async def cmd_need(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add item to shopping list."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
@@ -307,35 +267,36 @@ async def cmd_need(
 
     item_text = " ".join(context.args)
 
-    await user_service.get_or_create_user(user)
-    await needs_service.add_need(
-        item=item_text,
-        user_id=user.id,
-        chat_id=update.message.chat_id,
-        message_id=update.message.message_id,
-    )
+    async with await get_session() as session:
+        await get_or_create_user(session, user)
+
+        new_item = NeededItem(
+            request_chat_id=update.message.chat_id,
+            request_message_id=update.message.message_id,
+            request_user_id=user.id,
+            pinned_chat_id=update.message.chat_id,
+            pinned_message_id=update.message.message_id,
+            item=item_text,
+        )
+        session.add(new_item)
+        await session.commit()
 
     await update.message.reply_text(f"Added to shopping list: {item_text}")
 
 
-@inject
-async def cmd_open(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    butler_service: ButlerService,
-) -> None:
+async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Open the door."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
-    if not butler_service.is_configured:
+    if not state.config.services.butler:
         await update.message.reply_text("Door opening is not configured.")
         return
 
-    success = await butler_service.open_door()
+    butler = state.config.services.butler
+    success = await open_door(state.http_client, butler.url, butler.token)
 
     if success:
         logger.info(f"User {format_user(user)} opened the door")
@@ -344,43 +305,40 @@ async def cmd_open(
         await update.message.reply_text("Failed to open door. Please try again.")
 
 
-@inject
-async def cmd_racovina(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    camera_service: CameraService,
-) -> None:
+async def cmd_racovina(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show racovina camera image."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
+        return
+
+    if not state.config.services.racovina_cam:
+        await update.message.reply_text("Camera is not configured.")
         return
 
     await update.message.chat.send_action("upload_photo")
 
-    image = await camera_service.get_racovina_image()
+    image = await get_camera_image(
+        state.http_client,
+        state.config.services.racovina_cam,
+    )
 
     if image:
         await update.message.reply_photo(image)
     else:
-        await update.message.reply_text("Camera is not configured or failed to fetch image.")
+        await update.message.reply_text("Failed to fetch camera image.")
 
 
-@inject
-async def cmd_userctl(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    user_service: UserService,
-) -> None:
+async def cmd_userctl(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user settings."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
-    macs = await user_service.get_user_macs(user.id)
+    async with await get_session() as session:
+        result = await session.execute(select(UserMac).where(UserMac.tg_id == user.id))
+        macs = result.scalars().all()
 
     text = f"<b>Your settings ({format_user(user)}):</b>\n\n"
     text += "<b>MAC addresses:</b>\n"
@@ -397,18 +355,10 @@ async def cmd_userctl(
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-@inject
-async def cmd_add_mac(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    user_service: UserService,
-) -> None:
+async def cmd_add_mac(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Add MAC address for presence detection."""
-    import re
-
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
@@ -418,30 +368,35 @@ async def cmd_add_mac(
 
     mac = context.args[0].upper()
 
+    # Basic MAC validation
+    import re
+
     if not re.match(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$", mac):
         await update.message.reply_text(
             "Invalid MAC address format. Use XX:XX:XX:XX:XX:XX"
         )
         return
 
-    added = await user_service.add_mac(user.id, mac)
+    async with await get_session() as session:
+        # Check if already exists
+        result = await session.execute(
+            select(UserMac).where(and_(UserMac.tg_id == user.id, UserMac.mac == mac))
+        )
+        if result.scalar_one_or_none():
+            await update.message.reply_text("This MAC address is already registered.")
+            return
 
-    if added:
-        await update.message.reply_text(f"MAC address {mac} added.")
-    else:
-        await update.message.reply_text("This MAC address is already registered.")
+        new_mac = UserMac(tg_id=user.id, mac=mac)
+        session.add(new_mac)
+        await session.commit()
+
+    await update.message.reply_text(f"MAC address {mac} added.")
 
 
-@inject
-async def cmd_remove_mac(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    resident_service: ResidentService,
-    user_service: UserService,
-) -> None:
+async def cmd_remove_mac(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Remove MAC address."""
     user = update.effective_user
-    if not await resident_service.is_resident(user.id):
+    if not await is_resident(user.id):
         await update.message.reply_text("This command is only available to residents.")
         return
 
@@ -451,39 +406,42 @@ async def cmd_remove_mac(
 
     mac = context.args[0].upper()
 
-    removed = await user_service.remove_mac(user.id, mac)
+    async with await get_session() as session:
+        result = await session.execute(
+            select(UserMac).where(and_(UserMac.tg_id == user.id, UserMac.mac == mac))
+        )
+        mac_record = result.scalar_one_or_none()
 
-    if removed:
-        await update.message.reply_text(f"MAC address {mac} removed.")
-    else:
-        await update.message.reply_text("This MAC address is not registered.")
+        if not mac_record:
+            await update.message.reply_text("This MAC address is not registered.")
+            return
+
+        await session.delete(mac_record)
+        await session.commit()
+
+    await update.message.reply_text(f"MAC address {mac} removed.")
 
 
-# =============================================================================
 # Background tasks
-# =============================================================================
-
-async def mac_monitoring_task(
-    app: Application,
-    config: Config,
-    http_client: httpx.AsyncClient,
-) -> None:
+async def mac_monitoring_task(app: Application) -> None:
     """Background task for MAC monitoring."""
     while True:
         try:
-            if config.services.mikrotik and _container:
-                leases = await get_mikrotik_leases(http_client, config.services.mikrotik)
+            if state.config.services.mikrotik:
+                leases = await get_mikrotik_leases(
+                    state.http_client,
+                    state.config.services.mikrotik,
+                )
 
                 # Get active MACs (seen in last 20 minutes)
                 active_macs = {
-                    lease.mac_address.upper()
-                    for lease in leases
-                    if lease.last_seen < timedelta(minutes=20)
+                    l.mac_address.upper()
+                    for l in leases
+                    if l.last_seen < timedelta(minutes=20)
                 }
 
                 # Get user IDs for these MACs
-                async with _container() as request_container:
-                    session = await request_container.get(AsyncSession)
+                async with await get_session() as session:
                     result = await session.execute(
                         select(UserMac).where(UserMac.mac.in_(active_macs))
                     )
@@ -491,15 +449,12 @@ async def mac_monitoring_task(
 
                 new_active_users = {mac.tg_id for mac in macs}
 
-                # Get current active users
-                current_active = state.active_users
-
                 # Detect changes
-                joined = new_active_users - current_active
-                left = current_active - new_active_users
+                joined = new_active_users - state.active_users
+                left = state.active_users - new_active_users
 
-                if (joined or left) and config.telegram.chats.mac_monitoring:
-                    chat_config = config.telegram.chats.mac_monitoring
+                if (joined or left) and state.config.telegram.chats.mac_monitoring:
+                    chat_config = state.config.telegram.chats.mac_monitoring
 
                     text = ""
                     if left:
@@ -520,11 +475,7 @@ async def mac_monitoring_task(
                             text=text,
                         )
 
-                # Update state
                 state.active_users = new_active_users
-                if _state_provider:
-                    _state_provider.update_active_users(new_active_users)
-
         except Exception as e:
             logger.error(f"MAC monitoring error: {e}")
 
@@ -533,82 +484,36 @@ async def mac_monitoring_task(
 
 async def post_init(app: Application) -> None:
     """Post-initialization hook."""
-    global _container
-
-    config = await _container.get(Config)
-    http_client = await _container.get(httpx.AsyncClient)
-
     # Start background tasks
-    asyncio.create_task(mac_monitoring_task(app, config, http_client))
+    asyncio.create_task(mac_monitoring_task(app))
 
-
-async def init_database(container: AsyncContainer) -> None:
-    """Initialize database tables."""
-    engine = await container.get(AsyncEngine)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
-# =============================================================================
-# Main entry point
-# =============================================================================
 
 def main() -> None:
     """Main entry point."""
-    global _container, _state_provider, state
-
     # Load configuration
-    config_path = os.environ.get("CONFIG_PATH")
-    db_path = os.environ.get("DB_PATH", "db.sqlite3")
-
     try:
-        config = load_config(config_path)
+        state.config = load_config()
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
 
-    # Set up legacy state for module compatibility
-    state.config = config
-
     logger.info(f"Starting F0RTHSP4CE Bot v{__version__}")
 
-    # Create DI providers
-    config_provider = ConfigProvider(config_path)
-    http_provider = HttpClientProvider()
-    db_provider = DatabaseProvider(db_path)
-    session_provider = SessionProvider()
-    _state_provider = StateProvider()
-    service_provider = ServiceProvider()
+    # Initialize HTTP client
+    state.http_client = httpx.AsyncClient(verify=False)
 
-    # Create async container
-    _container = make_async_container(
-        config_provider,
-        http_provider,
-        db_provider,
-        session_provider,
-        _state_provider,
-        service_provider,
-    )
-
-    # Initialize database and HTTP client
-    async def init():
-        await init_database(_container)
-        state.http_client = await _container.get(httpx.AsyncClient)
-
-    asyncio.get_event_loop().run_until_complete(init())
+    # Initialize database
+    asyncio.get_event_loop().run_until_complete(init_db())
 
     # Create application
     app = (
         Application.builder()
-        .token(config.telegram.token)
+        .token(state.config.telegram.token)
         .post_init(post_init)
         .build()
     )
 
-    # Set up Dishka integration
-    setup_dishka(_container, app)
-
-    # Register command handlers
+    # Register command handlers - basic
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("version", cmd_version))
@@ -624,35 +529,47 @@ def main() -> None:
     app.add_handler(CommandHandler("remove_mac", cmd_remove_mac))
 
     # Register module handlers
+    # Butler module
     for handler in butler.get_handlers():
         app.add_handler(handler)
 
+    # Camera module
     for handler in camera.get_handlers():
         app.add_handler(handler)
 
+    # Userctl module
     for handler in userctl.get_handlers():
         app.add_handler(handler)
 
+    # Broadcast module
     for handler in broadcast.get_handlers():
         app.add_handler(handler)
 
+    # Polls module
     for handler in polls.get_handlers():
         app.add_handler(handler)
     app.add_handler(polls.get_poll_answer_handler())
 
+    # Borrowed items module
     for handler in borrowed_items.get_handlers():
         app.add_handler(handler)
     app.add_handler(borrowed_items.get_callback_handler())
 
+    # Welcome module
     app.add_handler(welcome.get_member_handler())
+
+    # Ask to visit module
     app.add_handler(ask_to_visit.get_message_handler())
 
+    # Vortex of doom module
     for handler in vortex_of_doom.get_handlers():
         app.add_handler(handler)
 
+    # TLDR module
     for handler in tldr.get_handlers():
         app.add_handler(handler)
 
+    # NLP handlers (should be last to catch remaining messages)
     for handler in get_nlp_handlers():
         app.add_handler(handler)
 
