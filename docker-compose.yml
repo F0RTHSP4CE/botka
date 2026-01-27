@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    container_name: f0bot-python
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - DB_PATH=/data/db.sqlite3
+    networks:
+      - botka
+
+networks:
+  botka:
+    driver: bridge
