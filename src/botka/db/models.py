@@ -136,8 +136,5 @@ class MacTrackerDevice(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
     mac_address: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_ip: Mapped[str | None] = mapped_column(String(64))
