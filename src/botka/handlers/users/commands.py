@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from html import escape as html_escape
+from aiogram import Router
+from aiogram.filters import Command, CommandObject
+from aiogram.types import Message
+from dishka.integrations.aiogram import FromDishka, inject
+
+from botka.db.models import UserTier
+from botka.handlers.user_links import format_user_link
+from botka.services.user_service import UserService
+
+router = Router(name=__name__)
+
+
+@router.message(Command("start"))
+@inject
+async def start_handler(
+    message: Message,
+    user_service: FromDishka[UserService],
+) -> None:
+    await user_service.ensure_user(message.from_user.id, message.from_user.username)
+    await message.reply("Ready.")
+
+
+@router.message(Command("user"))
+@inject
+async def user_handler(
+    message: Message,
+    command: CommandObject,
+    user_service: FromDishka[UserService],
+) -> None:
+    await user_service.ensure_user(message.from_user.id, message.from_user.username)
+    args = (command.args or "").split()
+    if not args:
+        target_user = (
+            message.reply_to_message.from_user
+            if message.reply_to_message and message.reply_to_message.from_user
+            else message.from_user
+        )
+        target_id = target_user.id
+        info_user = await user_service.get_user(target_id)
+        if info_user is None:
+            tier = await user_service.ensure_user(
+                target_id,
+                target_user.username,
+            )
+            info_user = await user_service.get_user(target_id)
+        else:
+            tier = info_user.tier
+        await message.reply(
+            "User info: {} | id {} | tier {} | username {}".format(
+                format_user_link(target_user),
+                target_id,
+                tier.value,
+                html_escape(info_user.username) if info_user else "unknown",
+            ),
+            disable_web_page_preview=True,
+        )
+        return
+
+    if len(args) not in (1, 2):
+        await message.reply(
+            html_escape(
+                "Usage: /user [<resident|member|guest> [<telegram_id>]] (or reply to a user message)"
+            )
+        )
+        return
+
+    if len(args) == 1:
+        tier_raw = args[0]
+        if message.reply_to_message and message.reply_to_message.from_user:
+            target_id = message.reply_to_message.from_user.id
+        else:
+            target_id = message.from_user.id
+    else:
+        tier_raw, target_id_raw = args
+        try:
+            target_id = int(target_id_raw)
+        except ValueError:
+            await message.reply("Invalid telegram id.")
+            return
+
+    try:
+        tier = UserTier(tier_raw)
+    except ValueError:
+        await message.reply("Tier must be resident, member, or guest.")
+        return
+    updated = await user_service.set_tier(message.from_user.id, target_id, tier)
+    if not updated:
+        await message.reply("Only residents can change tiers.")
+        return
+    target_user = await user_service.get_user(target_id)
+    target_label = format_user_link(
+        telegram_id=target_id,
+        username=target_user.username if target_user else None,
+    )
+    await message.reply(
+        "Tier updated: {} is now a {}.".format(target_label, tier.value),
+        disable_web_page_preview=True,
+    )

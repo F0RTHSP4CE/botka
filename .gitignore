@@ -9,24 +9,10 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-
-# PyInstaller
-*.manifest
-*.spec
+.eggs/
+MANIFEST
 
 # Installer logs
 pip-log.txt
@@ -46,45 +32,30 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Translations
-*.mo
-*.pot
-
 # Environments
 .env
-.venv
-env/
+.env.*
+.venv/
 venv/
 ENV/
-env.bak/
-venv.bak/
 
-# IDE
-.idea/
+# IDEs/editors
 .vscode/
-*.swp
-*.swo
-*~
+.idea/
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Logs
+*.log
 
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# ruff
-.ruff_cache/
-
-# Local config
-config.yaml
-*.db
-*.sqlite
-
-# OS
+# OS files
 .DS_Store
 Thumbs.db
+
+# SQLite
+*.sqlite
+*.sqlite3
+
+# Docker
+*.pid
+
+# Project-specific
+__pypackages__/

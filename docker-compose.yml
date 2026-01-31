@@ -1,17 +1,30 @@
 services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: botka
+      POSTGRES_PASSWORD: botka
+      POSTGRES_DB: botka
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
   bot:
     build: .
-    container_name: f0bot-python
-    restart: unless-stopped
-    volumes:
-      - ./data:/data
-      - ./config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
+    depends_on:
+      - db
+  pgweb:
+    image: sosedoff/pgweb
+    env_file:
+      - .env
     environment:
-      - CONFIG_PATH=/app/config.yaml
-      - DB_PATH=/data/db.sqlite3
-    networks:
-      - botka
+      PGWEB_DATABASE_URL: ${BOTKA_PGWEB_DATABASE_URL}
+    depends_on:
+      - db
+    ports:
+      - "8081:8081"
 
-networks:
-  botka:
-    driver: bridge
+volumes:
+  db_data:

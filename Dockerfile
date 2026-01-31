@@ -1,20 +1,16 @@
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+# Enable BuildKit cache mounts for uv
+# syntax=docker/dockerfile:1.7-labs
 
 WORKDIR /app
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY pyproject.toml README.md /app/
+COPY src /app/src
 
-# Copy project files
-COPY pyproject.toml .
-COPY botka botka/
+ENV UV_CACHE_DIR=/root/.cache/uv
 
-# Install dependencies with uv
-RUN uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+	uv pip install --system .
 
-# Create data directory for SQLite database
-RUN mkdir -p /data
-
-ENV PYTHONUNBUFFERED=1
-
-CMD ["uv", "run", "python", "-m", "botka"]
+CMD ["botka"]
