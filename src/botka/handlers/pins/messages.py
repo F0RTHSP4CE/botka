@@ -10,6 +10,7 @@ from dishka.integrations.aiogram import FromDishka, inject
 from botka.config import Settings
 from botka.services.borrowed_items_service import BorrowedItemsService
 from botka.services.polls_service import PollsService
+from botka.services.shopping_list_service import ShoppingListService
 
 router = Router(name=__name__)
 
@@ -119,6 +120,7 @@ async def pinned_message_handler(
     settings: FromDishka[Settings],
     borrowed_service: FromDishka[BorrowedItemsService],
     polls_service: FromDishka[PollsService],
+    shopping_service: FromDishka[ShoppingListService],
 ) -> None:
     pinned = message.pinned_message
     if pinned is None:
@@ -127,6 +129,18 @@ async def pinned_message_handler(
         return
     if not _is_tracked_chat(settings, message.chat.id):
         return
+    if (
+        settings.shopping_chat_id is not None
+        and settings.shopping_topic_id is not None
+        and pinned.chat.id == settings.shopping_chat_id
+        and pinned.message_thread_id == settings.shopping_topic_id
+    ):
+        needs_message_id = await shopping_service.get_needs_message_id(
+            settings.shopping_chat_id,
+            settings.shopping_topic_id,
+        )
+        if needs_message_id == pinned.message_id:
+            return
     borrowed_items = await borrowed_service.list_items_for_message(
         pinned.chat.id, pinned.message_id
     )
