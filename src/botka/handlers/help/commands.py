@@ -13,12 +13,19 @@ HELP_TEXT = (
     "/start — initialize your user profile.\n"
     "/help — show this help message.\n"
     "\n"
+    "Doors:\n"
+    "/open — open main door and gate (residents/members).\n"
+    "/open_gate — open the gate.\n"
+    "\n"
+    "Borrowed items:\n"
+    "/borrowed — list borrowed items.\n"
+    "\n"
     "Shopping:\n"
     "/need &lt;item&gt; — add item to the shopping list.\n"
     "/needs — show open items with buttons.\n"
     "\n"
     "Administration:\n"
-    "/user &lt;telegram_id&gt; &lt;resident|member|guest&gt; — set user tier."
+    "/user [&lt;resident|member|guest&gt; [&lt;telegram_id&gt;]] — view or set user tier (or reply)."
 )
 
 
