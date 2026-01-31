@@ -11,7 +11,6 @@ requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.24.0",
     "SQLAlchemy>=2.0.25",
-    "asyncpg>=0.29.0",
     "dishka>=1.1.0",
     "pydantic-settings>=2.2.1",
     "httpx>=0.27.0",

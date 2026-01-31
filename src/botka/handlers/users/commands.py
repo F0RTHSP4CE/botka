@@ -13,12 +13,24 @@ from botka.services.user_service import UserService
 router = Router(name=__name__)
 
 
+def _get_explicit_reply_user(message: Message):
+    reply = message.reply_to_message
+    if reply is None or reply.from_user is None:
+        return None
+    if reply.forum_topic_created is not None:
+        return None
+    return reply.from_user
+
+
 @router.message(Command("start"))
 @inject
 async def start_handler(
     message: Message,
     user_service: FromDishka[UserService],
 ) -> None:
+    if message.from_user is None:
+        await message.reply("Cannot determine sender.")
+        return
     await user_service.ensure_user(message.from_user.id, message.from_user.username)
     await message.reply("Ready.")
 
@@ -30,14 +42,16 @@ async def user_handler(
     command: CommandObject,
     user_service: FromDishka[UserService],
 ) -> None:
+    if message.from_user is None:
+        await message.reply("Cannot determine sender.")
+        return
     await user_service.ensure_user(message.from_user.id, message.from_user.username)
     args = (command.args or "").split()
     if not args:
-        target_user = (
-            message.reply_to_message.from_user
-            if message.reply_to_message and message.reply_to_message.from_user
-            else message.from_user
-        )
+        target_user = _get_explicit_reply_user(message) or message.from_user
+        if target_user is None:
+            await message.reply("Cannot determine target user.")
+            return
         target_id = target_user.id
         info_user = await user_service.get_user(target_id)
         if info_user is None:
@@ -69,10 +83,14 @@ async def user_handler(
 
     if len(args) == 1:
         tier_raw = args[0]
-        if message.reply_to_message and message.reply_to_message.from_user:
-            target_id = message.reply_to_message.from_user.id
-        else:
+        reply_user = _get_explicit_reply_user(message)
+        if reply_user is not None:
+            target_id = reply_user.id
+        elif message.from_user is not None:
             target_id = message.from_user.id
+        else:
+            await message.reply("Cannot determine target user.")
+            return
     else:
         tier_raw, target_id_raw = args
         try:

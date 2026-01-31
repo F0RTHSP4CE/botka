@@ -14,7 +14,7 @@ Telegram bot backend with async handlers, SQLAlchemy, and Dishka DI.
 cp .env.example .env
 ```
 
-2) Edit `.env` with your bot token and database URL.
+2) Edit `.env` with your bot token and database URL (SQLite by default).
 
 ## Run locally with uv
 ```
