@@ -120,6 +120,6 @@ class PollsService:
             return [UserTier.resident]
         if audience == PollAudience.members:
             return [UserTier.member]
-        if audience == PollAudience.everyone:
+        if audience in (PollAudience.everyone, PollAudience.all, PollAudience.anyone):
             return [UserTier.member, UserTier.resident]
         return [UserTier.resident, UserTier.member]

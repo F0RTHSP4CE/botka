@@ -31,6 +31,8 @@ class PollAudience(str, enum.Enum):
     residents = "residents"
     members = "members"
     everyone = "everyone"
+    all = "all"
+    anyone = "anyone"
 
 
 class User(Base):
