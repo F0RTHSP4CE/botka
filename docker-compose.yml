@@ -6,6 +6,7 @@ services:
       - .env
     volumes:
       - bot_data:/data
-
+    ports:
+      - "1818:1818"
 volumes:
   bot_data:

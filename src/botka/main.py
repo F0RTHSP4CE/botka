@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -12,16 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from botka.config import Settings
 from botka.db.session import init_models
 from botka.di.container import build_container
-from botka.handlers import borrowed, doors, help, pins, shopping, users
+from botka.handlers import borrowed, doors, help, mac_tracker, pins, shopping, users
 from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import callbacks as poll_callbacks
 from botka.handlers.polls import messages as poll_messages
 from botka.handlers.polls.autoclose import poll_autoclose_loop
+from botka.mac_tracker.web import run_mac_tracker_server
+from botka.services.mac_tracker_service import mac_tracker_poll_loop
 
 
 async def _run() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = Settings()
+    if not settings.mac_tracker_jwt_secret:
+        settings.mac_tracker_jwt_secret = secrets.token_urlsafe(48)
     container = build_container(settings)
 
     engine = await container.get(AsyncEngine)
@@ -35,6 +40,8 @@ async def _run() -> None:
     dp.include_router(help.commands.router)
     dp.include_router(users.commands.router)
     dp.include_router(doors.commands.router)
+    dp.include_router(mac_tracker.commands.router)
+    dp.include_router(mac_tracker.callbacks.router)
     dp.include_router(borrowed.commands.router)
     dp.include_router(shopping.commands.router)
     dp.include_router(shopping.messages.router)
@@ -51,10 +58,16 @@ async def _run() -> None:
 
     sessionmaker = await container.get(async_sessionmaker)
     poll_task = asyncio.create_task(poll_autoclose_loop(bot, sessionmaker))
+    mac_poll_task = asyncio.create_task(
+        mac_tracker_poll_loop(bot, sessionmaker, settings)
+    )
+    mac_web_task = asyncio.create_task(run_mac_tracker_server(settings, sessionmaker))
     try:
         await dp.start_polling(bot)
     finally:
         poll_task.cancel()
+        mac_poll_task.cancel()
+        mac_web_task.cancel()
         await container.close()
         await bot.session.close()
 

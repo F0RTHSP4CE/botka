@@ -22,6 +22,19 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
     openai_timeout_seconds: float = 10.0
+    mac_tracker_base_url: str | None = None
+    mac_tracker_bind_host: str = "0.0.0.0"
+    mac_tracker_bind_port: int = 1818
+    mac_tracker_poll_seconds: float = 30.0
+    mac_tracker_jwt_secret: str | None = None
+    mac_tracker_jwt_ttl_seconds: int = 900
+    mac_tracker_notify_chat_id: int | None = None
+    mac_tracker_notify_topic_id: int | None = None
+    mikrotik_base_url: str | None = None
+    mikrotik_username: str | None = None
+    mikrotik_password: str | None = None
+    mikrotik_timeout_seconds: float = 5.0
+    mikrotik_verify_tls: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -61,6 +74,8 @@ class Settings(BaseSettings):
         "borrowed_topic_id",
         "borrowed_chat_id",
         "pins_chat_id",
+        "mac_tracker_notify_chat_id",
+        "mac_tracker_notify_topic_id",
         mode="before",
     )
     @classmethod

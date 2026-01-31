@@ -23,6 +23,10 @@ class UserService:
     async def get_user(self, telegram_id: int) -> User | None:
         return await self._get_by_telegram_id(telegram_id)
 
+    async def get_user_by_id(self, user_id: int) -> User | None:
+        result = await self._session.execute(select(User).where(User.id == user_id))
+        return result.scalar_one_or_none()
+
     async def list_users_by_telegram_ids(
         self, telegram_ids: Iterable[int]
     ) -> Sequence[User]:
@@ -32,6 +36,13 @@ class UserService:
         result = await self._session.execute(
             select(User).where(User.telegram_id.in_(ids))
         )
+        return result.scalars().all()
+
+    async def list_users_by_ids(self, user_ids: Iterable[int]) -> Sequence[User]:
+        ids = list(user_ids)
+        if not ids:
+            return []
+        result = await self._session.execute(select(User).where(User.id.in_(ids)))
         return result.scalars().all()
 
     async def _upsert(
