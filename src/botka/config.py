@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     shopping_topic_id: int | None = None
     borrowed_chat_id: int | None = None
     borrowed_topic_id: int | None = None
+    pins_chat_id: int | None = None
+    pins_tracked_chat_ids: list[int] = Field(default_factory=list)
     bootstrap_resident_ids: list[int] = Field(default_factory=list)
     usbutler_base_url: str | None = None
     usbutler_api_key: str | None = None
@@ -39,11 +41,26 @@ class Settings(BaseSettings):
             return [int(part) for part in items]
         return list(value)
 
+    @field_validator("pins_tracked_chat_ids", mode="before")
+    @classmethod
+    def parse_pins_tracked_ids(
+        cls, value: str | int | Iterable[int] | None
+    ) -> list[int]:
+        if value is None:
+            return []
+        if isinstance(value, int):
+            return [value]
+        if isinstance(value, str):
+            items = [part.strip() for part in value.split(",") if part.strip()]
+            return [int(part) for part in items]
+        return list(value)
+
     @field_validator(
         "shopping_topic_id",
         "shopping_chat_id",
         "borrowed_topic_id",
         "borrowed_chat_id",
+        "pins_chat_id",
         mode="before",
     )
     @classmethod

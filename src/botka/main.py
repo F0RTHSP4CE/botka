@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from botka.config import Settings
 from botka.db.session import init_models
 from botka.di.container import build_container
-from botka.handlers import borrowed, doors, help, shopping, users
+from botka.handlers import borrowed, doors, help, pins, shopping, users
 from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import callbacks as poll_callbacks
 from botka.handlers.polls import messages as poll_messages
@@ -42,6 +42,7 @@ async def _run() -> None:
     dp.include_router(borrowed.messages.router)
     dp.include_router(doors.callbacks.router)
     dp.include_router(borrowed.callbacks.router)
+    dp.include_router(pins.messages.router)
     dp.include_router(poll_messages.router)
     dp.include_router(poll_callbacks.router)
     dp.include_router(poll_answers.router)
