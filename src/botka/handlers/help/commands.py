@@ -20,7 +20,7 @@ HELP_TEXT = (
     "MAC tracker:\n"
     "/mac — get a device registration link (residents/members).\n"
     "/status — list who is currently in the space.\n"
-    "/mac_clear [<telegram_id>] — clear MAC assignments (residents can clear others).\n"
+    "/mac_clear [&lt;telegram_id&gt;] — clear MAC assignments (residents can clear others).\n"
     "\n"
     "Borrowed items:\n"
     "/borrowed — list borrowed items.\n"
