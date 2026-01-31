@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     borrowed_chat_id: int | None = None
     borrowed_topic_id: int | None = None
     pins_chat_id: int | None = None
-    pins_tracked_chat_ids: list[int] = Field(default_factory=list)
-    bootstrap_resident_ids: list[int] = Field(default_factory=list)
+    pins_tracked_chat_ids: list[int] | str = Field(default_factory=list)
+    bootstrap_resident_ids: list[int] | str = Field(default_factory=list)
     usbutler_base_url: str | None = None
     usbutler_api_key: str | None = None
     usbutler_timeout_seconds: float = 5.0
