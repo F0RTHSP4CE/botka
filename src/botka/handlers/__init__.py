@@ -1,3 +1,3 @@
-from . import doors, help, shopping, users
+from . import borrowed, doors, help, shopping, users
 
-__all__ = ["doors", "help", "shopping", "users"]
+__all__ = ["borrowed", "doors", "help", "shopping", "users"]

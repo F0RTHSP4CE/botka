@@ -71,6 +71,25 @@ class ShoppingNeedsPin(Base):
     message_id: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class BorrowedItem(Base):
+    __tablename__ = "borrowed_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_by_telegram_id: Mapped[int] = mapped_column(
+        BigInteger, index=True, nullable=False
+    )
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_name: Mapped[str] = mapped_column(Text, nullable=False)
+    returned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    returned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 class Poll(Base):
     __tablename__ = "polls"
 

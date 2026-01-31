@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from botka.config import Settings
 from botka.db.session import create_engine, create_sessionmaker
+from botka.services.borrowed_item_detector import BorrowedItemDetector
+from botka.services.borrowed_items_service import BorrowedItemsService
 from botka.services.polls_service import PollsService
 from botka.services.shopping_list_service import ShoppingListService
 from botka.services.user_service import UserService
@@ -46,8 +48,16 @@ class AppProvider(Provider):
         return ShoppingListService(session)
 
     @provide(scope=Scope.REQUEST)
+    def borrowed_items_service(self, session: AsyncSession) -> BorrowedItemsService:
+        return BorrowedItemsService(session)
+
+    @provide(scope=Scope.REQUEST)
     def polls_service(self, session: AsyncSession) -> PollsService:
         return PollsService(session)
+
+    @provide(scope=Scope.APP)
+    def borrowed_item_detector(self, settings: Settings) -> BorrowedItemDetector:
+        return BorrowedItemDetector(settings)
 
     @provide(scope=Scope.APP)
     def usbutler_service(self, settings: Settings) -> UsbutlerService:

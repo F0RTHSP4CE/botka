@@ -11,10 +11,15 @@ class Settings(BaseSettings):
     database_url: str
     shopping_chat_id: int | None = None
     shopping_topic_id: int | None = None
+    borrowed_chat_id: int | None = None
+    borrowed_topic_id: int | None = None
     bootstrap_resident_ids: list[int] = Field(default_factory=list)
     usbutler_base_url: str | None = None
     usbutler_api_key: str | None = None
     usbutler_timeout_seconds: float = 5.0
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-4o-mini"
+    openai_timeout_seconds: float = 10.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -34,7 +39,13 @@ class Settings(BaseSettings):
             return [int(part) for part in items]
         return list(value)
 
-    @field_validator("shopping_topic_id", "shopping_chat_id", mode="before")
+    @field_validator(
+        "shopping_topic_id",
+        "shopping_chat_id",
+        "borrowed_topic_id",
+        "borrowed_chat_id",
+        mode="before",
+    )
     @classmethod
     def parse_optional_int(cls, value: str | int | None) -> int | None:
         if value is None:
