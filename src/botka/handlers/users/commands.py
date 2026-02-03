@@ -26,12 +26,10 @@ def _get_explicit_reply_user(message: Message):
 @inject
 async def start_handler(
     message: Message,
-    user_service: FromDishka[UserService],
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     await message.reply("Ready.")
 
 
@@ -45,7 +43,6 @@ async def user_handler(
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     args = (command.args or "").split()
     if not args:
         target_user = _get_explicit_reply_user(message) or message.from_user

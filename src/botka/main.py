@@ -19,6 +19,7 @@ from botka.handlers.polls import callbacks as poll_callbacks
 from botka.handlers.polls import messages as poll_messages
 from botka.handlers.polls.autoclose import poll_autoclose_loop
 from botka.mac_tracker.web import run_mac_tracker_server
+from botka.middlewares import UserSyncMiddleware
 from botka.services.mac_tracker_service import mac_tracker_poll_loop
 
 
@@ -57,6 +58,10 @@ async def _run() -> None:
     setup_dishka(container, dp)
 
     sessionmaker = await container.get(async_sessionmaker)
+    user_sync = UserSyncMiddleware(sessionmaker, settings)
+    dp.message.middleware(user_sync)
+    dp.callback_query.middleware(user_sync)
+    dp.poll_answer.middleware(user_sync)
     poll_task = asyncio.create_task(poll_autoclose_loop(bot, sessionmaker))
     mac_poll_task = asyncio.create_task(
         mac_tracker_poll_loop(bot, sessionmaker, settings)

@@ -14,7 +14,6 @@ from botka.handlers.borrowed.utils import build_return_keyboard
 from botka.handlers.user_links import format_user_link
 from botka.services.borrowed_item_detector import BorrowedItemDetector
 from botka.services.borrowed_items_service import BorrowedItemsService
-from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 
@@ -124,7 +123,6 @@ async def _process_media_group(
 async def borrowed_message_handler(
     message: Message,
     settings: FromDishka[Settings],
-    user_service: FromDishka[UserService],
     borrowed_service: FromDishka[BorrowedItemsService],
     detector: FromDishka[BorrowedItemDetector],
 ) -> None:
@@ -139,7 +137,6 @@ async def borrowed_message_handler(
         and message.chat.id != settings.borrowed_chat_id
     ):
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     group_id = message.media_group_id
     if group_id:
         image_bytes, image_mime = await _download_photo(message)

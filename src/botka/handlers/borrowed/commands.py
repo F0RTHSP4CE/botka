@@ -25,7 +25,6 @@ async def borrowed_list_handler(
     if message.from_user is None:
         await message.reply("Unknown user.")
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     items = await borrowed_service.list_open_items()
     if not items:
         await message.reply("No borrowed items.")

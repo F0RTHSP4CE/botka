@@ -10,7 +10,7 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
 from botka.handlers.user_links import format_user_link
-from botka.db.models import UserTier
+from botka.db.models import User, UserTier
 from botka.services.mac_tracker_service import MacTrackerService
 from botka.services.user_service import UserService
 
@@ -54,6 +54,7 @@ async def mac_link_handler(
     settings: FromDishka[Settings],
     user_service: FromDishka[UserService],
     mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
@@ -61,15 +62,13 @@ async def mac_link_handler(
     if not settings.mac_tracker_base_url:
         await message.reply("MAC tracker is not configured.")
         return
-    tier = await user_service.ensure_user(
-        message.from_user.id, message.from_user.username
-    )
-    if tier not in (UserTier.resident, UserTier.member):
-        await message.reply("Only residents and members can register devices.")
-        return
-    user = await user_service.get_user(message.from_user.id)
+    user = user_record
     if user is None:
         await message.reply("Could not load your user record.")
+        return
+    tier = user.tier
+    if tier not in (UserTier.resident, UserTier.member):
+        await message.reply("Only residents and members can register devices.")
         return
     token = await mac_tracker.create_token(user.id)
     url = settings.mac_tracker_base_url.rstrip("/") + f"/mac/{token}"
@@ -133,11 +132,11 @@ async def mac_clear_handler(
     command: CommandObject,
     user_service: FromDishka[UserService],
     mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     target_id: int | None = None
     args = (command.args or "").split()
     if args:
@@ -153,7 +152,7 @@ async def mac_clear_handler(
         else:
             target_id = message.from_user.id
     if target_id != message.from_user.id:
-        if not await user_service.is_resident(message.from_user.id):
+        if user_record is None or user_record.tier != UserTier.resident:
             await message.reply("Only residents can clear other users.")
             return
     target_user = await user_service.get_user(target_id)

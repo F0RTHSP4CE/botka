@@ -9,9 +9,8 @@ from dishka.integrations.aiogram import FromDishka, inject
 from botka.config import Settings
 from botka.handlers.shopping.needs import build_needs_keyboard, pin_latest_needs
 from botka.handlers.user_links import format_user_link
-from botka.db.models import UserTier
+from botka.db.models import User, UserTier
 from botka.services.shopping_list_service import ShoppingListService
-from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 
@@ -21,16 +20,13 @@ router = Router(name=__name__)
 async def buy_callback(
     callback: CallbackQuery,
     settings: FromDishka[Settings],
-    user_service: FromDishka[UserService],
     shopping_service: FromDishka[ShoppingListService],
+    user_record: User | None = None,
 ) -> None:
     if callback.message is None:
         await callback.answer("No message context.", show_alert=True)
         return
-    tier = await user_service.ensure_user(
-        callback.from_user.id,
-        callback.from_user.username,
-    )
+    tier = user_record.tier if user_record else UserTier.guest
     if tier not in (UserTier.resident, UserTier.member):
         await callback.answer(
             "Only residents and members can mark items as bought.",

@@ -10,7 +10,6 @@ from botka.config import Settings
 from botka.handlers.shopping.needs import pin_latest_needs
 from botka.handlers.user_links import format_user_link
 from botka.services.shopping_list_service import ShoppingListService
-from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 
@@ -20,7 +19,6 @@ router = Router(name=__name__)
 async def topic_list_handler(
     message: Message,
     settings: FromDishka[Settings],
-    user_service: FromDishka[UserService],
     shopping_service: FromDishka[ShoppingListService],
 ) -> None:
     if message.text is None:
@@ -31,7 +29,6 @@ async def topic_list_handler(
         return
     if message.from_user is None:
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     items = shopping_service.extract_dash_items(message.text)
     if not items:
         return

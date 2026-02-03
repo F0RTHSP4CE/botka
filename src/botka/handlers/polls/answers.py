@@ -56,7 +56,6 @@ async def poll_answer_handler(
 ) -> None:
     if poll_answer.user is None:
         return
-    await user_service.ensure_user(poll_answer.user.id, poll_answer.user.username)
     poll = await polls_service.get_poll(poll_answer.poll_id)
     if poll is None or poll.closed:
         return

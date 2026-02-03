@@ -17,7 +17,6 @@ from botka.handlers.polls.utils import (
     register_poll_ignored_options,
 )
 from botka.services.polls_service import PollsService
-from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 
@@ -27,14 +26,12 @@ router = Router(name=__name__)
 async def poll_message_handler(
     message: Message,
     polls_service: FromDishka[PollsService],
-    user_service: FromDishka[UserService],
 ) -> None:
     if message.poll is None or message.from_user is None:
         return
     parsed = parse_poll_question(message.poll.question)
     if parsed is None:
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     options = [InputPollOption(text=option.text) for option in message.poll.options]
     new_poll = await message.bot.send_poll(
         chat_id=message.chat.id,

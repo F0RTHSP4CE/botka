@@ -16,7 +16,6 @@ from botka.handlers.shopping.needs import (
     pin_latest_needs,
 )
 from botka.services.shopping_list_service import ShoppingListService
-from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 
@@ -27,13 +26,11 @@ async def need_handler(
     message: Message,
     command: CommandObject,
     settings: FromDishka[Settings],
-    user_service: FromDishka[UserService],
     shopping_service: FromDishka[ShoppingListService],
 ) -> None:
     if message.from_user is None:
         await message.reply(html.escape("Unknown user."))
         return
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     text = (command.args or "").strip()
     if not text:
         await message.reply(html.escape("Usage: /need <item>"))
@@ -88,10 +85,8 @@ async def need_handler(
 async def needs_handler(
     message: Message,
     settings: FromDishka[Settings],
-    user_service: FromDishka[UserService],
     shopping_service: FromDishka[ShoppingListService],
 ) -> None:
-    await user_service.ensure_user(message.from_user.id, message.from_user.username)
     items = await shopping_service.list_open_items()
     is_shopping_thread = (
         settings.shopping_chat_id == message.chat.id

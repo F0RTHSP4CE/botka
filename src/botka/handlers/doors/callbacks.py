@@ -4,7 +4,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.db.models import UserTier
+from botka.db.models import User, UserTier
 from botka.handlers.doors.utils import (
     DOOR_BOTH_ID,
     DOOR_GATE_ID,
@@ -12,7 +12,6 @@ from botka.handlers.doors.utils import (
     door_label,
 )
 from botka.services.usbutler_service import UsbutlerService
-from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 
@@ -22,7 +21,7 @@ router = Router(name=__name__)
 async def open_door_callback(
     callback: CallbackQuery,
     usbutler_service: FromDishka[UsbutlerService],
-    user_service: FromDishka[UserService],
+    user_record: User | None = None,
 ) -> None:
     if callback.from_user is None:
         await callback.answer("Unknown user.", show_alert=True)
@@ -35,10 +34,7 @@ async def open_door_callback(
     except (IndexError, ValueError):
         await callback.answer("Invalid door.", show_alert=True)
         return
-    tier = await user_service.ensure_user(
-        callback.from_user.id,
-        callback.from_user.username,
-    )
+    tier = user_record.tier if user_record else UserTier.guest
     if door_id in (DOOR_MAIN_ID, DOOR_BOTH_ID) and tier not in (
         UserTier.resident,
         UserTier.member,
