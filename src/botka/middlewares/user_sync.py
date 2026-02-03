@@ -31,6 +31,6 @@ class UserSyncMiddleware(BaseMiddleware):
         if user is not None:
             async with self._sessionmaker() as session:
                 user_service = UserService(session, self._settings)
-            await user_service.ensure_user(user.id, user.username)
-            data["user_record"] = await user_service.get_user(user.id)
+                await user_service.ensure_user(user.id, user.username)
+                data["user_record"] = await user_service.get_user(user.id)
         return await handler(event, data)

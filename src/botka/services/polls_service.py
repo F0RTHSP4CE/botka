@@ -47,6 +47,24 @@ class PollsService:
         )
         return result.scalar_one_or_none()
 
+    async def get_poll_by_awaiting_message_id(
+        self, chat_id: int, message_id: int
+    ) -> Poll | None:
+        result = await self._session.execute(
+            select(Poll).where(
+                Poll.chat_id == chat_id, Poll.awaiting_message_id == message_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_poll_by_message_id(
+        self, chat_id: int, message_id: int
+    ) -> Poll | None:
+        result = await self._session.execute(
+            select(Poll).where(Poll.chat_id == chat_id, Poll.message_id == message_id)
+        )
+        return result.scalar_one_or_none()
+
     async def set_awaiting_message_id(self, poll_id: str, message_id: int) -> None:
         await self._session.execute(
             update(Poll)

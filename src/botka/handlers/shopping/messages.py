@@ -14,7 +14,7 @@ from botka.services.shopping_list_service import ShoppingListService
 router = Router(name=__name__)
 
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.startswith("/"))
 @inject
 async def topic_list_handler(
     message: Message,

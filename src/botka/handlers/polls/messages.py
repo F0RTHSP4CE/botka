@@ -11,7 +11,6 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.handlers.polls.utils import (
     build_awaiting_text,
-    build_close_keyboard,
     parse_poll_question,
     poll_close_at,
     register_poll_ignored_options,
@@ -63,7 +62,6 @@ async def poll_message_handler(
         message_thread_id=message.message_thread_id,
         text=awaiting_text,
         reply_to_message_id=new_poll.message_id,
-        reply_markup=build_close_keyboard(new_poll.poll.id),
         disable_web_page_preview=True,
     )
     await polls_service.create_poll(

@@ -15,7 +15,7 @@ from botka.db.session import init_models
 from botka.di.container import build_container
 from botka.handlers import borrowed, doors, help, mac_tracker, pins, shopping, users
 from botka.handlers.polls import answers as poll_answers
-from botka.handlers.polls import callbacks as poll_callbacks
+from botka.handlers.polls import commands as poll_commands
 from botka.handlers.polls import messages as poll_messages
 from botka.handlers.polls.autoclose import poll_autoclose_loop
 from botka.mac_tracker.web import run_mac_tracker_server
@@ -45,6 +45,7 @@ async def _run() -> None:
     dp.include_router(mac_tracker.callbacks.router)
     dp.include_router(borrowed.commands.router)
     dp.include_router(shopping.commands.router)
+    dp.include_router(poll_commands.router)
     dp.include_router(shopping.messages.router)
     dp.include_router(shopping.callbacks.router)
     dp.include_router(borrowed.messages.router)
@@ -52,7 +53,6 @@ async def _run() -> None:
     dp.include_router(borrowed.callbacks.router)
     dp.include_router(pins.messages.router)
     dp.include_router(poll_messages.router)
-    dp.include_router(poll_callbacks.router)
     dp.include_router(poll_answers.router)
 
     setup_dishka(container, dp)
@@ -73,8 +73,15 @@ async def _run() -> None:
         poll_task.cancel()
         mac_poll_task.cancel()
         mac_web_task.cancel()
+        await asyncio.gather(
+            poll_task,
+            mac_poll_task,
+            mac_web_task,
+            return_exceptions=True,
+        )
         await container.close()
         await bot.session.close()
+        await engine.dispose()
 
 
 def main() -> None:

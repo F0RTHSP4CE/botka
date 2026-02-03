@@ -118,7 +118,9 @@ async def _process_media_group(
     )
 
 
-@router.message(F.text | F.photo)
+@router.message(
+    (F.text | F.photo) & ~F.text.startswith("/") & ~F.caption.startswith("/")
+)
 @inject
 async def borrowed_message_handler(
     message: Message,
@@ -149,7 +151,6 @@ async def borrowed_message_handler(
                     _process_media_group(group_id, borrowed_service, detector)
                 )
         return
-    text = (message.text or message.caption or "").strip()
     image_bytes, image_mime = await _download_photo(message)
     images: list[tuple[bytes, str]] = []
     if image_bytes:

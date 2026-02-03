@@ -29,6 +29,9 @@ HELP_TEXT = (
     "/need &lt;item&gt; — add item to the shopping list.\n"
     "/needs — show open items with buttons.\n"
     "\n"
+    "Polls:\n"
+    "/poll_close [&lt;poll_id&gt;] — close a poll you created (or reply to the poll/awaiting message).\n"
+    "\n"
     "Administration:\n"
     "/user [&lt;resident|member|guest&gt; [&lt;telegram_id&gt;]] — view or set user tier (or reply)."
 )

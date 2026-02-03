@@ -4,7 +4,6 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from botka.db.models import PollAudience, User
 from botka.handlers.user_links import format_user_link
@@ -79,18 +78,6 @@ def register_poll_ignored_options(poll_id: str, option_texts: list[str]) -> None
 
 def get_poll_ignored_option_ids(poll_id: str) -> set[int]:
     return _POLL_IGNORED_OPTION_IDS.get(poll_id, set())
-
-
-def build_close_keyboard(poll_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Close poll", callback_data=f"poll_close:{poll_id}"
-                )
-            ]
-        ]
-    )
 
 
 def build_awaiting_text(

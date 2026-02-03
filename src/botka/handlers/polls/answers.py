@@ -7,7 +7,6 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.handlers.polls.utils import (
     build_awaiting_text,
-    build_close_keyboard,
     get_poll_ignored_option_ids,
 )
 from botka.services.polls_service import PollsService
@@ -38,7 +37,6 @@ async def _refresh_awaiting_list(
             chat_id=poll.chat_id,
             message_id=poll.awaiting_message_id,
             text=build_awaiting_text(awaiting_users, poll.closes_at, warning_users),
-            reply_markup=build_close_keyboard(poll.poll_id),
             disable_web_page_preview=True,
         )
     except TelegramBadRequest as exc:
