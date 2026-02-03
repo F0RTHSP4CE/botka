@@ -14,6 +14,7 @@ from botka.handlers.polls.utils import (
     build_close_keyboard,
     parse_poll_question,
     poll_close_at,
+    register_poll_ignored_options,
 )
 from botka.services.polls_service import PollsService
 from botka.services.user_service import UserService
@@ -54,6 +55,9 @@ async def poll_message_handler(
     )
     if new_poll.poll is None:
         return
+    register_poll_ignored_options(
+        new_poll.poll.id, [option.text for option in message.poll.options]
+    )
     closes_at = poll_close_at(datetime.now(timezone.utc))
     target_users = list(await polls_service.list_target_users(parsed.audience))
     awaiting_text = build_awaiting_text(target_users, closes_at)

@@ -5,7 +5,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import PollAnswer
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.handlers.polls.utils import build_awaiting_text, build_close_keyboard
+from botka.handlers.polls.utils import (
+    build_awaiting_text,
+    build_close_keyboard,
+    get_poll_ignored_option_ids,
+)
 from botka.services.polls_service import PollsService
 from botka.services.user_service import UserService
 
@@ -56,7 +60,10 @@ async def poll_answer_handler(
     poll = await polls_service.get_poll(poll_answer.poll_id)
     if poll is None or poll.closed:
         return
-    voted = len(poll_answer.option_ids) > 0
+    ignored_option_ids = get_poll_ignored_option_ids(poll_answer.poll_id)
+    voted = any(
+        option_id not in ignored_option_ids for option_id in poll_answer.option_ids
+    )
     await polls_service.set_vote(poll_answer.poll_id, poll_answer.user.id, voted)
     await _refresh_awaiting_list(
         bot,

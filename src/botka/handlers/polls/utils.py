@@ -16,6 +16,10 @@ class ParsedPoll(NamedTuple):
     display_question: str
 
 
+_POLL_IGNORED_OPTION_IDS: dict[str, set[int]] = {}
+_IGNORED_POLL_OPTION_KEYS = ("abstain", "see results")
+
+
 _POLL_PREFIX_RE = re.compile(
     r"^\[(residents|members|everyone)\]\s*(.+)$", re.IGNORECASE
 )
@@ -45,6 +49,36 @@ def parse_poll_question(raw_question: str) -> ParsedPoll | None:
         question=question,
         display_question=display_question,
     )
+
+
+def _normalize_option_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text.casefold().strip())
+    return re.sub(r"[^a-z0-9 ]+", "", normalized).strip()
+
+
+def _is_ignored_option_text(text: str) -> bool:
+    normalized = _normalize_option_text(text)
+    if not normalized:
+        return False
+    for key in _IGNORED_POLL_OPTION_KEYS:
+        if normalized == key or normalized.startswith(f"{key} "):
+            return True
+    return False
+
+
+def register_poll_ignored_options(poll_id: str, option_texts: list[str]) -> None:
+    ignored = set()
+    for index, text in enumerate(option_texts):
+        if _is_ignored_option_text(text):
+            ignored.add(index)
+    if ignored:
+        _POLL_IGNORED_OPTION_IDS[poll_id] = ignored
+    else:
+        _POLL_IGNORED_OPTION_IDS.pop(poll_id, None)
+
+
+def get_poll_ignored_option_ids(poll_id: str) -> set[int]:
+    return _POLL_IGNORED_OPTION_IDS.get(poll_id, set())
 
 
 def build_close_keyboard(poll_id: str) -> InlineKeyboardMarkup:
