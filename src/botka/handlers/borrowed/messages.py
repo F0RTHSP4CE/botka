@@ -157,7 +157,7 @@ async def borrowed_message_handler(
         images.append((image_bytes, image_mime or "image/jpeg"))
     await _handle_borrowed_entry(
         message,
-        text,
+        message.text or message.caption,
         images,
         borrowed_service,
         detector,

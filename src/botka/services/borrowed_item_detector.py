@@ -48,12 +48,14 @@ class BorrowedItemDetector:
                     "Borrowed detector HTTP error: %s",
                     response.status_code,
                 )
-                return self._fallback_parse_items(clean_text)
+                fallback = self._fallback_parse_items(clean_text)
+                return fallback or ([clean_text] if clean_text else ["unknown item"])
             data: dict[str, Any] = response.json()
             text_out = self._extract_text_output(data)
             if not text_out:
                 logger.warning("Borrowed detector empty output text.")
-                return self._fallback_parse_items(clean_text)
+                fallback = self._fallback_parse_items(clean_text)
+                return fallback or ([clean_text] if clean_text else ["unknown item"])
             parsed = self._parse_json(text_out)
             items = self._coerce_items(parsed) if parsed else []
             if items:
@@ -67,10 +69,12 @@ class BorrowedItemDetector:
                 "Borrowed detector parsed no items; using fallback. Output: %s",
                 text_out,
             )
-            return self._fallback_parse_items(clean_text)
+            fallback = self._fallback_parse_items(clean_text)
+            return fallback or ([clean_text] if clean_text else ["unknown item"])
         except Exception:
             logger.exception("Borrowed detector failed; using fallback parser.")
-            return self._fallback_parse_items(clean_text)
+            fallback = self._fallback_parse_items(clean_text)
+            return fallback or ([clean_text] if clean_text else ["unknown item"])
 
     def _build_payload(
         self,
