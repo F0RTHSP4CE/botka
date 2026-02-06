@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.24.0",
+    "apscheduler>=3.10.4",
     "SQLAlchemy>=2.0.25",
     "dishka>=1.1.0",
     "pydantic-settings>=2.2.1",

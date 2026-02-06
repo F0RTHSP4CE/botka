@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     mac_tracker_jwt_ttl_seconds: int = 900
     mac_tracker_notify_chat_id: int | None = None
     mac_tracker_notify_topic_id: int | None = None
+    heartbeat_chat_id: int | None = None
+    heartbeat_topic_id: int | None = None
+    good_morning_chat_id: int | None = None
+    good_morning_topic_id: int | None = None
+    good_morning_city: str | None = None
+    good_morning_photo_urls: list[str] | str = Field(default_factory=list)
+    periodic_heartbeat_seconds: float = 3600.0
+    timezone: str | None = None
     mikrotik_base_url: str | None = None
     mikrotik_username: str | None = None
     mikrotik_password: str | None = None
@@ -68,6 +76,18 @@ class Settings(BaseSettings):
             return [int(part) for part in items]
         return list(value)
 
+    @field_validator("good_morning_photo_urls", mode="before")
+    @classmethod
+    def parse_good_morning_photo_urls(
+        cls, value: str | Iterable[str] | None
+    ) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            items = [part.strip() for part in value.split(",") if part.strip()]
+            return items
+        return list(value)
+
     @field_validator(
         "shopping_topic_id",
         "shopping_chat_id",
@@ -76,6 +96,10 @@ class Settings(BaseSettings):
         "pins_chat_id",
         "mac_tracker_notify_chat_id",
         "mac_tracker_notify_topic_id",
+        "heartbeat_chat_id",
+        "heartbeat_topic_id",
+        "good_morning_chat_id",
+        "good_morning_topic_id",
         mode="before",
     )
     @classmethod

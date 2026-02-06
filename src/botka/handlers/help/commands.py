@@ -32,6 +32,10 @@ HELP_TEXT = (
     "Polls:\n"
     "/poll_close [&lt;poll_id&gt;] — close a poll you created (or reply to the poll/awaiting message).\n"
     "\n"
+    "Periodic:\n"
+    "/periodic — list periodic jobs.\n"
+    "/periodic_run &lt;job_name&gt; — run a periodic job now (residents only).\n"
+    "\n"
     "Administration:\n"
     "/user [&lt;resident|member|guest&gt; [&lt;telegram_id&gt;]] — view or set user tier (or reply)."
 )
