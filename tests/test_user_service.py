@@ -50,3 +50,15 @@ async def test_set_tier_creates_user_when_missing(session, settings):
     assert await service.is_resident(1001) is True
     tier = await service.ensure_user(5005, "member")
     assert tier == UserTier.member
+
+
+@pytest.mark.asyncio
+async def test_set_tier_blocks_bootstrap_downgrade(session, settings):
+    service = UserService(session, settings)
+
+    await service.ensure_user(1001, "resident")
+    updated = await service.set_tier(1001, 1001, UserTier.member)
+
+    assert updated is False
+    tier = await service.ensure_user(1001, "resident")
+    assert tier == UserTier.resident

@@ -79,8 +79,13 @@ class UserService:
         user = await self._get_by_telegram_id(telegram_id)
         return user is not None and user.tier == UserTier.resident
 
+    def is_bootstrap_resident(self, telegram_id: int) -> bool:
+        return telegram_id in self._settings.bootstrap_resident_ids
+
     async def set_tier(self, actor_id: int, target_id: int, tier: UserTier) -> bool:
         if not await self.is_resident(actor_id):
+            return False
+        if self.is_bootstrap_resident(target_id) and tier != UserTier.resident:
             return False
         user = await self._get_by_telegram_id(target_id)
         if user is None:

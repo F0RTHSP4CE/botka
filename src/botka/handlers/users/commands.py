@@ -101,6 +101,9 @@ async def user_handler(
     except ValueError:
         await message.reply("Tier must be resident, member, or guest.")
         return
+    if user_service.is_bootstrap_resident(target_id) and tier != UserTier.resident:
+        await message.reply("Bootstrapped user tiers cannot be changed.")
+        return
     updated = await user_service.set_tier(message.from_user.id, target_id, tier)
     if not updated:
         await message.reply("Only residents can change tiers.")
