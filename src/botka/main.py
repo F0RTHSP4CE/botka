@@ -14,6 +14,7 @@ from botka.config import Settings
 from botka.db.session import init_models
 from botka.di.container import build_container
 from botka.handlers import borrowed, doors, help, mac_tracker, pins, shopping, users
+from botka.handlers.pins.messages import NewTopicForwardMiddleware
 from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import commands as poll_commands
 from botka.handlers.polls import messages as poll_messages
@@ -60,6 +61,7 @@ async def _run() -> None:
     sessionmaker = await container.get(async_sessionmaker)
     user_sync = UserSyncMiddleware(sessionmaker, settings)
     dp.message.middleware(user_sync)
+    dp.message.middleware(NewTopicForwardMiddleware(settings))
     dp.callback_query.middleware(user_sync)
     dp.poll_answer.middleware(user_sync)
     poll_task = asyncio.create_task(poll_autoclose_loop(bot, sessionmaker))
