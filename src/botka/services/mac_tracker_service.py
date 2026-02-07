@@ -22,6 +22,7 @@ class MacLease:
     ip_address: str
     assigned_at: datetime | None
     last_seen_raw: str | None
+    last_seen_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class MikrotikDhcpClient:
         base_url = self._base_url or ""
         username = self._username or ""
         password = self._password or ""
+        now = datetime.now(timezone.utc)
         try:
             async with httpx.AsyncClient(
                 base_url=base_url,
@@ -80,12 +82,18 @@ class MikrotikDhcpClient:
                 continue
             assigned_at = _get_lease_assigned_at(item)
             last_seen_raw = _get_lease_last_seen_raw(item)
+            last_seen_at = (
+                _parse_mikrotik_datetime(last_seen_raw, now)
+                if last_seen_raw is not None
+                else None
+            )
             leases.append(
                 MacLease(
                     mac_address=str(mac),
                     ip_address=str(ip),
                     assigned_at=assigned_at,
                     last_seen_raw=last_seen_raw,
+                    last_seen_at=last_seen_at,
                 )
             )
         return leases
@@ -239,7 +247,9 @@ class MacTrackerService:
 
     async def list_present_users(self) -> list[MacTrackerPresenceView]:
         leases = await self._mikrotik.list_active_leases()
-        active_map = {lease.mac_address: lease for lease in leases}
+        active_map = {
+            lease.mac_address: lease for lease in leases if self._is_lease_recent(lease)
+        }
         if not active_map:
             return []
         result = await self._session.execute(
@@ -289,7 +299,9 @@ class MacTrackerService:
 
     async def sync_presence(self) -> set[int]:
         leases = await self._mikrotik.list_active_leases()
-        active_map = {lease.mac_address: lease for lease in leases}
+        active_map = {
+            lease.mac_address: lease for lease in leases if self._is_lease_recent(lease)
+        }
         if active_map:
             result = await self._session.execute(
                 select(MacTrackerDevice).where(
@@ -319,6 +331,16 @@ class MacTrackerService:
 
     def _jwt_secret(self) -> str:
         return self._settings.mac_tracker_jwt_secret or self._settings.bot_token
+
+    def _is_lease_recent(self, lease: MacLease) -> bool:
+        max_age = self._settings.mac_tracker_max_last_seen_seconds
+        if max_age is None or max_age <= 0:
+            return True
+        seen_at = lease.last_seen_at or lease.assigned_at
+        if seen_at is None:
+            return True
+        now = datetime.now(timezone.utc)
+        return now - seen_at <= timedelta(seconds=max_age)
 
     async def _upsert_device(
         self, user_id: int, lease: MacLease, seen_at: datetime

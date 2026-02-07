@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     mac_tracker_poll_seconds: float = 30.0
     mac_tracker_jwt_secret: str | None = None
     mac_tracker_jwt_ttl_seconds: int = 900
+    mac_tracker_max_last_seen_seconds: float | None = 600
     mac_tracker_allowed_subnets: list[str] | str = Field(default_factory=list)
     mac_tracker_subnet_warning_text: str | None = None
     mac_tracker_notify_chat_id: int | None = None
