@@ -195,7 +195,10 @@ async def _fetch_photos(context: PeriodicContext) -> list[BufferedInputFile]:
         return []
     photos: list[BufferedInputFile] = []
     async with httpx.AsyncClient(
-        timeout=15.0, follow_redirects=True, max_redirects=5
+        timeout=15.0,
+        follow_redirects=True,
+        max_redirects=5,
+        headers={"Accept": "image/*", "User-Agent": "botka"},
     ) as client:
         for url in urls:
             photo = await _fetch_photo(client, url)
@@ -205,20 +208,27 @@ async def _fetch_photos(context: PeriodicContext) -> list[BufferedInputFile]:
 
 
 async def _fetch_photo(client: httpx.AsyncClient, url: str) -> BufferedInputFile | None:
-    try:
-        response = await client.get(url, timeout=10.0)
-    except httpx.HTTPError:
-        return None
-    if response.is_error:
-        return None
-    content_type = response.headers.get("content-type", "")
-    if not content_type.startswith("image/"):
-        return None
-    if not response.content:
-        logger.warning("Empty image response for %s", url)
-        return None
-    filename = _filename_from_url(url, content_type)
-    return BufferedInputFile(response.content, filename=filename)
+    for attempt in range(1, 6):
+        try:
+            response = await client.get(url, timeout=10.0)
+        except httpx.HTTPError:
+            return None
+        if response.is_error:
+            return None
+        content_type = response.headers.get("content-type", "")
+        if not content_type.startswith("image/"):
+            return None
+        content = await response.aread()
+        if content:
+            filename = _filename_from_url(url, content_type)
+            return BufferedInputFile(content, filename=filename)
+        logger.warning(
+            "Empty image response for %s (attempt %s, content-length=%s)",
+            url,
+            attempt,
+            response.headers.get("content-length"),
+        )
+    return None
 
 
 def _filename_from_url(url: str, content_type: str) -> str:
