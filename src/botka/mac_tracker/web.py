@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape as html_escape
+import ipaddress
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -34,6 +35,15 @@ def build_mac_tracker_app(
             return HTMLResponse(
                 _page("Error", "<p>Cannot determine IP.</p>"), status_code=400
             )
+        subnet_allowed = _is_ip_allowed(settings, ip_address)
+        subnet_warning = _build_subnet_warning(settings, ip_address)
+        register_form = ""
+        if subnet_allowed:
+            register_form = """
+                <form method="post" action="/mac/{token}/confirm">
+                    <button type="submit">Register device</button>
+                </form>
+                """
         async with sessionmaker() as session:
             service = MacTrackerService(session, settings, MikrotikDhcpClient(settings))
             user_id = service.get_token_user_id(token)
@@ -61,10 +71,8 @@ def build_mac_tracker_app(
                 <p>Tap the button below to register your device in the space.</p>
                 <p>User: <strong>{user}</strong></p>
                 <p>IP: <strong>{ip}</strong></p>
-
-                <form method="post" action="/mac/{token}/confirm">
-                    <button type="submit">Register device</button>
-                </form>
+                {subnet_warning}
+                {register_form}
                 <br>
                 <hr>
                 <div class="examples">
@@ -87,6 +95,12 @@ def build_mac_tracker_app(
                 """.format(
                     user=user_label,
                     ip=html_escape(ip_address),
+                    register_form=(
+                        register_form.format(token=html_escape(token))
+                        if register_form
+                        else ""
+                    ),
+                    subnet_warning=subnet_warning,
                     token=html_escape(token),
                 ),
             )
@@ -99,6 +113,7 @@ def build_mac_tracker_app(
             return HTMLResponse(
                 _page("Error", "<p>Cannot determine IP.</p>"), status_code=400
             )
+        subnet_warning = _build_subnet_warning(settings, ip_address)
         async with sessionmaker() as session:
             mikrotik = MikrotikDhcpClient(settings)
             service = MacTrackerService(session, settings, mikrotik)
@@ -136,9 +151,14 @@ def build_mac_tracker_app(
         return HTMLResponse(
             _page(
                 "Registered",
-                "<p>Device registered. MAC: <strong>{}</strong></p><p>{}</p>".format(
-                    html_escape(lease.mac_address),
-                    html_escape(now),
+                """
+                <p>Device registered. MAC: <strong>{mac}</strong></p>
+                <p>{time}</p>
+                {subnet_warning}
+                """.format(
+                    mac=html_escape(lease.mac_address),
+                    time=html_escape(now),
+                    subnet_warning=subnet_warning,
                 ),
             )
         )
@@ -153,6 +173,37 @@ def _get_client_ip(request: Request) -> str | None:
     if request.client is None:
         return None
     return request.client.host
+
+
+def _build_subnet_warning(settings: Settings, ip_address: str) -> str:
+    if _is_ip_allowed(settings, ip_address):
+        return ""
+    warning_text = (settings.mac_tracker_subnet_warning_text or "").strip()
+    if not warning_text:
+        warning_text = "Note: your IP is outside the allowed MAC tracker subnets."
+    return (
+        '<p style="color: #fff; background-color: #ff0000; padding: 0.5rem">'
+        f"{warning_text}"
+        "</p>"
+    )
+
+
+def _is_ip_allowed(settings: Settings, ip_address: str) -> bool:
+    subnets = settings.mac_tracker_allowed_subnets
+    if not subnets:
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return False
+    for subnet in subnets:
+        try:
+            network = ipaddress.ip_network(subnet, strict=False)
+        except ValueError:
+            continue
+        if ip_obj in network:
+            return True
+    return False
 
 
 def _page(title: str, body: str) -> str:

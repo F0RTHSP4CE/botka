@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     mac_tracker_poll_seconds: float = 30.0
     mac_tracker_jwt_secret: str | None = None
     mac_tracker_jwt_ttl_seconds: int = 900
+    mac_tracker_allowed_subnets: list[str] | str = Field(default_factory=list)
+    mac_tracker_subnet_warning_text: str | None = None
     mac_tracker_notify_chat_id: int | None = None
     mac_tracker_notify_topic_id: int | None = None
     heartbeat_chat_id: int | None = None
@@ -79,6 +81,18 @@ class Settings(BaseSettings):
     @field_validator("good_morning_photo_urls", mode="before")
     @classmethod
     def parse_good_morning_photo_urls(
+        cls, value: str | Iterable[str] | None
+    ) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            items = [part.strip() for part in value.split(",") if part.strip()]
+            return items
+        return list(value)
+
+    @field_validator("mac_tracker_allowed_subnets", mode="before")
+    @classmethod
+    def parse_mac_tracker_allowed_subnets(
         cls, value: str | Iterable[str] | None
     ) -> list[str]:
         if value is None:
