@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     mac_tracker_subnet_warning_text: str | None = None
     mac_tracker_notify_chat_id: int | None = None
     mac_tracker_notify_topic_id: int | None = None
+    decisions_chat_id: int | None = None
+    decisions_topic_id: int | None = None
     heartbeat_chat_id: int | None = None
     heartbeat_topic_id: int | None = None
     good_morning_chat_id: int | None = None
@@ -40,7 +42,8 @@ class Settings(BaseSettings):
     good_morning_city: str | None = None
     good_morning_photo_urls: list[str] | str = Field(default_factory=list)
     periodic_heartbeat_seconds: float = 3600.0
-    polls_autoclose_interval_seconds: float = 3600.0
+    polls_maintenance_interval_seconds: float = 3600.0
+    polls_default_close_days: int = 7
     timezone: str | None = None
     mikrotik_base_url: str | None = None
     mikrotik_username: str | None = None
@@ -112,6 +115,8 @@ class Settings(BaseSettings):
         "pins_chat_id",
         "mac_tracker_notify_chat_id",
         "mac_tracker_notify_topic_id",
+        "decisions_chat_id",
+        "decisions_topic_id",
         "heartbeat_chat_id",
         "heartbeat_topic_id",
         "good_morning_chat_id",

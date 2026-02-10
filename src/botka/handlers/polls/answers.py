@@ -38,4 +38,9 @@ async def poll_answer_handler(
         option_id not in ignored_option_ids for option_id in poll_answer.option_ids
     )
     await polls_service.set_vote(poll_answer.poll_id, poll_answer.user.id, voted)
+    await polls_service.set_option_votes(
+        poll_answer.poll_id,
+        poll_answer.user.id,
+        poll_answer.option_ids,
+    )
     await refresh_awaiting_message(bot, poll, polls_service, user_service)

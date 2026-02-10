@@ -10,6 +10,8 @@ from botka.db.models import (
     Poll,
     PollAudience,
     PollIgnoredOption,
+    PollOption,
+    PollOptionVote,
     PollVote,
     User,
     UserTier,
@@ -134,6 +136,39 @@ class PollsService:
         )
         await self._session.commit()
 
+    async def set_option_votes(
+        self, poll_id: str, user_telegram_id: int, option_ids: Iterable[int]
+    ) -> None:
+        await self._session.execute(
+            delete(PollOptionVote).where(
+                PollOptionVote.poll_id == poll_id,
+                PollOptionVote.user_telegram_id == user_telegram_id,
+            )
+        )
+        for option_id in option_ids:
+            self._session.add(
+                PollOptionVote(
+                    poll_id=poll_id,
+                    user_telegram_id=user_telegram_id,
+                    option_id=option_id,
+                )
+            )
+        await self._session.commit()
+
+    async def list_option_votes(
+        self, poll_id: str, user_ids: Iterable[int]
+    ) -> list[int]:
+        ids = list(user_ids)
+        if not ids:
+            return []
+        result = await self._session.execute(
+            select(PollOptionVote.option_id).where(
+                PollOptionVote.poll_id == poll_id,
+                PollOptionVote.user_telegram_id.in_(ids),
+            )
+        )
+        return [row[0] for row in result.all()]
+
     async def get_ignored_option_ids(self, poll_id: str) -> set[int]:
         result = await self._session.execute(
             select(PollIgnoredOption.option_id).where(
@@ -151,6 +186,22 @@ class PollsService:
         for option_id in option_ids:
             self._session.add(PollIgnoredOption(poll_id=poll_id, option_id=option_id))
         await self._session.commit()
+
+    async def set_poll_options(self, poll_id: str, options: Sequence[str]) -> None:
+        await self._session.execute(
+            delete(PollOption).where(PollOption.poll_id == poll_id)
+        )
+        for index, text in enumerate(options):
+            self._session.add(PollOption(poll_id=poll_id, option_id=index, text=text))
+        await self._session.commit()
+
+    async def list_poll_options(self, poll_id: str) -> list[tuple[int, str]]:
+        result = await self._session.execute(
+            select(PollOption.option_id, PollOption.text).where(
+                PollOption.poll_id == poll_id
+            )
+        )
+        return [(row[0], row[1]) for row in result.all()]
 
     async def list_target_users(self, audience: PollAudience) -> Sequence[User]:
         tiers = self._audience_tiers(audience)

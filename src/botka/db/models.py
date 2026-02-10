@@ -127,6 +127,26 @@ class PollVote(Base):
     )
 
 
+class PollOptionVote(Base):
+    __tablename__ = "poll_option_votes"
+    __table_args__ = (
+        UniqueConstraint(
+            "poll_id",
+            "user_telegram_id",
+            "option_id",
+            name="uq_poll_option_vote",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    poll_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    option_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class PollIgnoredOption(Base):
     __tablename__ = "poll_ignored_options"
     __table_args__ = (
@@ -136,6 +156,16 @@ class PollIgnoredOption(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     poll_id: Mapped[str] = mapped_column(String(255), nullable=False)
     option_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class PollOption(Base):
+    __tablename__ = "poll_options"
+    __table_args__ = (UniqueConstraint("poll_id", "option_id", name="uq_poll_option"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    poll_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    option_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class MacTrackerDevice(Base):

@@ -22,7 +22,7 @@ def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
                 interval_seconds=interval,
             )
         )
-    poll_interval = settings.polls_autoclose_interval_seconds
+    poll_interval = settings.polls_maintenance_interval_seconds
     if poll_interval > 0:
         jobs.append(
             PeriodicJob(
