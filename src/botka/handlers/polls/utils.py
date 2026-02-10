@@ -43,9 +43,9 @@ def parse_poll_question(raw_question: str) -> ParsedPoll | None:
         question = match.group(2).strip()
         display_question = f"[{audience_tag}] {question}" if question else ""
     else:
-        audience = PollAudience.everyone
+        audience = PollAudience.residents
         question = without_bang
-        display_question = question
+        display_question = f"[residents] {question}"
     if not question:
         return None
     return ParsedPoll(
