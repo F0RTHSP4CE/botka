@@ -16,6 +16,11 @@ async def poll_maintenance(context: PeriodicContext) -> None:
         user_service = UserService(session, context.settings)
         due_polls = await service.list_due_polls(now)
         for poll in due_polls:
+            # Re-check status to avoid posting decisions for polls closed via command.
+            fresh_poll = await service.get_poll(poll.poll_id)
+            if fresh_poll is None or fresh_poll.closed:
+                continue
+            poll = fresh_poll
             poll_result = None
             try:
                 poll_result = await context.bot.stop_poll(
