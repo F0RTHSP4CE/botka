@@ -32,11 +32,15 @@ async def poll_message_handler(
     if parsed is None:
         return
     options = [InputPollOption(text=option.text) for option in message.poll.options]
+    reply_to_message_id = (
+        message.reply_to_message.message_id if message.reply_to_message else None
+    )
     new_poll = await message.bot.send_poll(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
         question=parsed.display_question,
         options=cast(list[InputPollOptionUnion], options),
+        reply_to_message_id=reply_to_message_id,
         is_anonymous=False,
         allows_multiple_answers=message.poll.allows_multiple_answers,
         type=message.poll.type,
@@ -51,7 +55,7 @@ async def poll_message_handler(
     )
     if new_poll.poll is None:
         return
-    register_poll_ignored_options(
+    ignored_option_ids = register_poll_ignored_options(
         new_poll.poll.id, [option.text for option in message.poll.options]
     )
     closes_at = poll_close_at(datetime.now(timezone.utc))
@@ -74,6 +78,8 @@ async def poll_message_handler(
         awaiting_message_id=awaiting_message.message_id,
         closes_at=closes_at,
     )
+    if ignored_option_ids:
+        await polls_service.set_ignored_option_ids(new_poll.poll.id, ignored_option_ids)
     await message.bot.pin_chat_message(
         chat_id=message.chat.id,
         message_id=new_poll.message_id,

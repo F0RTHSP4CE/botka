@@ -27,7 +27,6 @@ from botka.handlers.pins.messages import NewTopicForwardMiddleware
 from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import commands as poll_commands
 from botka.handlers.polls import messages as poll_messages
-from botka.handlers.polls.autoclose import poll_autoclose_loop
 from botka.mac_tracker.web import run_mac_tracker_server
 from botka.middlewares import UserSyncMiddleware
 from botka.periodic import periodic_loop
@@ -75,7 +74,6 @@ async def _run() -> None:
     dp.message.middleware(NewTopicForwardMiddleware(settings))
     dp.callback_query.middleware(user_sync)
     dp.poll_answer.middleware(user_sync)
-    poll_task = asyncio.create_task(poll_autoclose_loop(bot, sessionmaker))
     mac_poll_task = asyncio.create_task(
         mac_tracker_poll_loop(bot, sessionmaker, settings)
     )
@@ -84,12 +82,10 @@ async def _run() -> None:
     try:
         await dp.start_polling(bot)
     finally:
-        poll_task.cancel()
         mac_poll_task.cancel()
         mac_web_task.cancel()
         periodic_task.cancel()
         await asyncio.gather(
-            poll_task,
             mac_poll_task,
             mac_web_task,
             periodic_task,

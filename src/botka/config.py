@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     good_morning_city: str | None = None
     good_morning_photo_urls: list[str] | str = Field(default_factory=list)
     periodic_heartbeat_seconds: float = 3600.0
+    polls_autoclose_interval_seconds: float = 3600.0
     timezone: str | None = None
     mikrotik_base_url: str | None = None
     mikrotik_username: str | None = None

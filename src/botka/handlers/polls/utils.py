@@ -5,8 +5,13 @@ from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
 
-from botka.db.models import PollAudience, User
+from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
+
+from botka.db.models import Poll, PollAudience, User
 from botka.handlers.user_links import format_user_link
+from botka.services.polls_service import PollsService
+from botka.services.user_service import UserService
 
 
 class ParsedPoll(NamedTuple):
@@ -65,7 +70,7 @@ def _is_ignored_option_text(text: str) -> bool:
     return False
 
 
-def register_poll_ignored_options(poll_id: str, option_texts: list[str]) -> None:
+def register_poll_ignored_options(poll_id: str, option_texts: list[str]) -> set[int]:
     ignored = set()
     for index, text in enumerate(option_texts):
         if _is_ignored_option_text(text):
@@ -74,10 +79,46 @@ def register_poll_ignored_options(poll_id: str, option_texts: list[str]) -> None
         _POLL_IGNORED_OPTION_IDS[poll_id] = ignored
     else:
         _POLL_IGNORED_OPTION_IDS.pop(poll_id, None)
+    return ignored
 
 
 def get_poll_ignored_option_ids(poll_id: str) -> set[int]:
     return _POLL_IGNORED_OPTION_IDS.get(poll_id, set())
+
+
+def cache_poll_ignored_option_ids(poll_id: str, option_ids: set[int]) -> None:
+    if option_ids:
+        _POLL_IGNORED_OPTION_IDS[poll_id] = set(option_ids)
+    else:
+        _POLL_IGNORED_OPTION_IDS.pop(poll_id, None)
+
+
+async def refresh_awaiting_message(
+    bot: Bot,
+    poll: Poll,
+    polls_service: PollsService,
+    user_service: UserService,
+) -> None:
+    if poll.awaiting_message_id is None or poll.closed:
+        return
+    target_users = list(await polls_service.list_target_users(poll.audience))
+    voted_ids = await polls_service.list_voted_user_ids(poll.poll_id)
+    awaiting_users = [
+        user for user in target_users if user.telegram_id not in voted_ids
+    ]
+    target_ids = {user.telegram_id for user in target_users}
+    warning_ids = [user_id for user_id in voted_ids if user_id not in target_ids]
+    warning_users = list(await user_service.list_users_by_telegram_ids(warning_ids))
+    try:
+        await bot.edit_message_text(
+            chat_id=poll.chat_id,
+            message_id=poll.awaiting_message_id,
+            text=build_awaiting_text(awaiting_users, poll.closes_at, warning_users),
+            disable_web_page_preview=True,
+        )
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in str(exc):
+            raise
 
 
 def build_awaiting_text(

@@ -6,7 +6,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from botka.db.models import Poll, PollAudience, PollVote, User, UserTier
+from botka.db.models import (
+    Poll,
+    PollAudience,
+    PollIgnoredOption,
+    PollVote,
+    User,
+    UserTier,
+)
 
 
 class PollsService:
@@ -88,6 +95,16 @@ class PollsService:
         )
         return result.scalars().all()
 
+    async def list_active_polls(self, now: datetime) -> Sequence[Poll]:
+        result = await self._session.execute(
+            select(Poll).where(
+                Poll.closed.is_(False),
+                Poll.closes_at > now,
+                Poll.awaiting_message_id.is_not(None),
+            )
+        )
+        return result.scalars().all()
+
     async def list_voted_user_ids(self, poll_id: str) -> set[int]:
         result = await self._session.execute(
             select(PollVote.user_telegram_id).where(PollVote.poll_id == poll_id)
@@ -115,6 +132,24 @@ class PollsService:
                 PollVote.user_telegram_id == user_telegram_id,
             )
         )
+        await self._session.commit()
+
+    async def get_ignored_option_ids(self, poll_id: str) -> set[int]:
+        result = await self._session.execute(
+            select(PollIgnoredOption.option_id).where(
+                PollIgnoredOption.poll_id == poll_id
+            )
+        )
+        return {row[0] for row in result.all()}
+
+    async def set_ignored_option_ids(
+        self, poll_id: str, option_ids: Iterable[int]
+    ) -> None:
+        await self._session.execute(
+            delete(PollIgnoredOption).where(PollIgnoredOption.poll_id == poll_id)
+        )
+        for option_id in option_ids:
+            self._session.add(PollIgnoredOption(poll_id=poll_id, option_id=option_id))
         await self._session.commit()
 
     async def list_target_users(self, audience: PollAudience) -> Sequence[User]:

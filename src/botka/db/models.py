@@ -127,6 +127,17 @@ class PollVote(Base):
     )
 
 
+class PollIgnoredOption(Base):
+    __tablename__ = "poll_ignored_options"
+    __table_args__ = (
+        UniqueConstraint("poll_id", "option_id", name="uq_poll_ignored_option"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    poll_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    option_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class MacTrackerDevice(Base):
     __tablename__ = "mac_tracker_devices"
     __table_args__ = (

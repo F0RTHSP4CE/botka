@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from botka.config import Settings
-from botka.periodic.jobs import PeriodicJob, send_good_morning, send_heartbeat
+from botka.periodic.jobs import (
+    PeriodicJob,
+    poll_maintenance,
+    send_good_morning,
+    send_heartbeat,
+)
 
 
 def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
@@ -15,6 +20,15 @@ def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
                 name="heartbeat",
                 handler=send_heartbeat,
                 interval_seconds=interval,
+            )
+        )
+    poll_interval = settings.polls_autoclose_interval_seconds
+    if poll_interval > 0:
+        jobs.append(
+            PeriodicJob(
+                name="poll_maintenance",
+                handler=poll_maintenance,
+                interval_seconds=poll_interval,
             )
         )
     jobs.append(
