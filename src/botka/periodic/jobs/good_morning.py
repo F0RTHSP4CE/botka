@@ -4,8 +4,10 @@ from dataclasses import dataclass
 import asyncio
 from datetime import datetime
 import logging
+import os
 import random
 import secrets
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from aiogram.types.input_file import BufferedInputFile
@@ -37,7 +39,9 @@ async def send_good_morning(context: PeriodicContext) -> None:
         if weather is not None
         else (context.settings.good_morning_city or "your city")
     )
-    now = datetime.now().strftime("%H:%M")
+    timezone = _resolve_timezone(context.settings)
+    now_dt = datetime.now(timezone) if timezone is not None else datetime.now()
+    now = now_dt.strftime("%H:%M")
     lines = ["Good morning! It's {} in {}.".format(now, city)]
     if weather is not None:
         weather_line = "Weather: <strong>{} {:.1f}°C {}</strong>".format(
@@ -456,6 +460,17 @@ def _weather_condition(code: int | None) -> tuple[str, str]:
         99: ("⛈️", "thunderstorm with heavy hail"),
     }
     return mapping.get(int(code), ("❓", "unknown"))
+
+
+def _resolve_timezone(settings) -> ZoneInfo | None:
+    timezone_name = settings.timezone or os.environ.get("TZ")
+    if not timezone_name:
+        return None
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Invalid timezone %s, using local timezone", timezone_name)
+        return None
 
 
 async def _fetch_photos(context: PeriodicContext) -> list[BufferedInputFile]:
