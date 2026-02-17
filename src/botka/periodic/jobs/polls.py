@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import html
 
+from aiogram.types import Poll as TelegramPoll
+
 from botka.periodic.jobs.base import PeriodicContext
 from botka.handlers.polls.utils import format_close_time, refresh_awaiting_message
 from botka.services.polls_service import PollsService
@@ -87,21 +89,23 @@ async def _post_poll_decision(
     context: PeriodicContext,
     service: PollsService,
     poll,
-    poll_result,
+    poll_result: TelegramPoll | None,
 ) -> None:
     if context.settings.decisions_chat_id is None:
         return
-    target_users = list(await service.list_target_users(poll.audience))
-    target_ids = {user.telegram_id for user in target_users}
-    if not target_ids:
-        return
     ignored_option_ids = await service.get_ignored_option_ids(poll.poll_id)
-    option_votes = await service.list_option_votes(poll.poll_id, target_ids)
-    counts: dict[int, int] = {}
-    for option_id in option_votes:
-        if option_id in ignored_option_ids:
-            continue
-        counts[option_id] = counts.get(option_id, 0) + 1
+    counts = _count_votes_from_poll_result(poll_result, ignored_option_ids)
+    if not counts:
+        target_users = list(await service.list_target_users(poll.audience))
+        target_ids = {user.telegram_id for user in target_users}
+        if not target_ids:
+            return
+        option_votes = await service.list_option_votes(poll.poll_id, target_ids)
+        counts = {}
+        for option_id in option_votes:
+            if option_id in ignored_option_ids:
+                continue
+            counts[option_id] = counts.get(option_id, 0) + 1
     if not counts:
         return
     max_count = max(counts.values())
@@ -138,17 +142,31 @@ async def _post_poll_decision(
 async def _resolve_option_text(
     service: PollsService,
     poll_id: str,
-    poll_result,
+    poll_result: TelegramPoll | None,
     option_id: int,
 ) -> str | None:
-    options = getattr(poll_result, "options", None)
-    if options and 0 <= option_id < len(options):
-        return options[option_id].text
     stored_options = await service.list_poll_options(poll_id)
     for stored_id, text in stored_options:
         if stored_id == option_id:
             return text
+    if poll_result is not None and 0 <= option_id < len(poll_result.options):
+        return poll_result.options[option_id].text
     return None
+
+
+def _count_votes_from_poll_result(
+    poll_result: TelegramPoll | None,
+    ignored_option_ids: set[int],
+) -> dict[int, int]:
+    if poll_result is None:
+        return {}
+    counts: dict[int, int] = {}
+    for option_id, option in enumerate(poll_result.options):
+        if option_id in ignored_option_ids:
+            continue
+        if option.voter_count > 0:
+            counts[option_id] = option.voter_count
+    return counts
 
 
 def _build_poll_link(chat_id: int, message_id: int) -> str:
