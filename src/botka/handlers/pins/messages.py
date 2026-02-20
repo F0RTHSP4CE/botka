@@ -107,6 +107,93 @@ def _format_poll_preview(message: Message) -> str:
     return "\n".join(lines)
 
 
+def _build_pinned_fallback_text(message: Message) -> str:
+    link = _build_message_link(message.chat, message.message_id)
+    fallback = "📌 Pinned message"
+    if link:
+        fallback = f'📌 <a href="{link}">Pinned message</a>'
+    return fallback
+
+
+async def _send_message_content(
+    bot: Bot,
+    chat_id: int,
+    source: Message,
+    reply_markup: InlineKeyboardMarkup | None,
+    caption: str | None,
+    parse_mode: str | None,
+) -> bool:
+    if source.photo:
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=source.photo[-1].file_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.animation:
+        await bot.send_animation(
+            chat_id=chat_id,
+            animation=source.animation.file_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.video:
+        await bot.send_video(
+            chat_id=chat_id,
+            video=source.video.file_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.video_note:
+        await bot.send_video_note(
+            chat_id=chat_id,
+            video_note=source.video_note.file_id,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.document:
+        await bot.send_document(
+            chat_id=chat_id,
+            document=source.document.file_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.audio:
+        await bot.send_audio(
+            chat_id=chat_id,
+            audio=source.audio.file_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.voice:
+        await bot.send_voice(
+            chat_id=chat_id,
+            voice=source.voice.file_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        return True
+    if source.sticker:
+        await bot.send_sticker(
+            chat_id=chat_id,
+            sticker=source.sticker.file_id,
+            reply_markup=reply_markup,
+        )
+        return True
+    return False
+
+
 async def _get_media_group_ids(
     chat_id: int, media_group_id: str, fallback_message_id: int
 ) -> list[int]:
@@ -125,6 +212,19 @@ async def _copy_or_resend(
     reply_markup: InlineKeyboardMarkup | None,
 ) -> None:
     """Try ``copy_message``; on failure re-send content by type."""
+    caption = source.caption or source.text
+    parse_mode = "HTML" if source.caption_entities or source.entities else None
+
+    if reply_markup is not None and await _send_message_content(
+        bot,
+        chat_id,
+        source,
+        reply_markup,
+        caption,
+        parse_mode,
+    ):
+        return
+
     try:
         await bot.copy_message(
             chat_id=chat_id,
@@ -140,70 +240,16 @@ async def _copy_or_resend(
             source.chat.id,
         )
 
-    caption = source.caption or source.text
-    parse_mode = "HTML" if source.caption_entities or source.entities else None
-
-    if source.photo:
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=source.photo[-1].file_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-    elif source.animation:
-        await bot.send_animation(
-            chat_id=chat_id,
-            animation=source.animation.file_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-    elif source.video:
-        await bot.send_video(
-            chat_id=chat_id,
-            video=source.video.file_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-    elif source.video_note:
-        await bot.send_video_note(
-            chat_id=chat_id,
-            video_note=source.video_note.file_id,
-            reply_markup=reply_markup,
-        )
-    elif source.document:
-        await bot.send_document(
-            chat_id=chat_id,
-            document=source.document.file_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-    elif source.audio:
-        await bot.send_audio(
-            chat_id=chat_id,
-            audio=source.audio.file_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-    elif source.voice:
-        await bot.send_voice(
-            chat_id=chat_id,
-            voice=source.voice.file_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            reply_markup=reply_markup,
-        )
-    elif source.sticker:
-        await bot.send_sticker(
-            chat_id=chat_id,
-            sticker=source.sticker.file_id,
-            reply_markup=reply_markup,
-        )
-    elif source.text:
+    if await _send_message_content(
+        bot,
+        chat_id,
+        source,
+        reply_markup,
+        caption,
+        parse_mode,
+    ):
+        return
+    if source.text:
         await bot.send_message(
             chat_id=chat_id,
             text=source.text,
@@ -212,13 +258,9 @@ async def _copy_or_resend(
             disable_web_page_preview=True,
         )
     else:
-        link = _build_message_link(source.chat, source.message_id)
-        fallback = "📌 Pinned message"
-        if link:
-            fallback = f'📌 <a href="{link}">Pinned message</a>'
         await bot.send_message(
             chat_id=chat_id,
-            text=fallback,
+            text=_build_pinned_fallback_text(source),
             reply_markup=reply_markup,
             disable_web_page_preview=True,
         )
@@ -468,7 +510,12 @@ async def pinned_message_handler(
                         reply_markup=footer,
                     )
                 except TelegramBadRequest:
-                    pass
+                    await message.bot.send_message(
+                        chat_id=settings.pins_chat_id,
+                        text=_build_pinned_fallback_text(pinned),
+                        reply_markup=footer,
+                        disable_web_page_preview=True,
+                    )
             return
     footer = _build_footer_keyboard(pinned)
     await _copy_or_resend(message.bot, settings.pins_chat_id, pinned, footer)
