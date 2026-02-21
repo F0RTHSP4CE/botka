@@ -10,6 +10,10 @@ from botka.db.session import create_engine, create_sessionmaker
 from botka.services.borrowed_item_detector import BorrowedItemDetector
 from botka.services.borrowed_items_service import BorrowedItemsService
 from botka.services.mac_tracker_service import MacTrackerService, MikrotikDhcpClient
+from botka.services.planka_album_tracker import PlankaAlbumTracker
+from botka.services.planka_client import PlankaClient
+from botka.services.planka_command_service import PlankaCommandService
+from botka.services.planka_mappings_service import PlankaCardMappingService
 from botka.services.polls_service import PollsService
 from botka.services.shopping_list_service import ShoppingListService
 from botka.services.user_service import UserService
@@ -76,6 +80,38 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def usbutler_service(self, settings: Settings) -> UsbutlerService:
         return UsbutlerService(settings)
+
+    @provide(scope=Scope.APP)
+    async def planka_client(self, settings: Settings) -> AsyncIterable[PlankaClient]:
+        client = PlankaClient(
+            base_url=settings.planka_base_url or "",
+            username_or_email=settings.planka_username_or_email or "",
+            password=settings.planka_password or "",
+            timeout_seconds=settings.planka_request_timeout_seconds,
+        )
+        if client.is_configured:
+            await client.start()
+        yield client
+        if client.is_configured:
+            await client.close()
+
+    @provide(scope=Scope.APP)
+    def planka_album_tracker(self) -> PlankaAlbumTracker:
+        return PlankaAlbumTracker()
+
+    @provide(scope=Scope.REQUEST)
+    def planka_mappings_service(self, session: AsyncSession) -> PlankaCardMappingService:
+        return PlankaCardMappingService(session)
+
+    @provide(scope=Scope.REQUEST)
+    def planka_command_service(
+        self,
+        planka: PlankaClient,
+        mappings: PlankaCardMappingService,
+        settings: Settings,
+        tracker: PlankaAlbumTracker,
+    ) -> PlankaCommandService:
+        return PlankaCommandService(planka, mappings, settings, tracker)
 
 
 def build_container(settings: Settings) -> AsyncContainer:

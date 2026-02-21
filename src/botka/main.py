@@ -20,6 +20,7 @@ from botka.handlers import (
     mac_tracker,
     periodic,
     pins,
+    planka,
     shopping,
     users,
 )
@@ -31,10 +32,13 @@ from botka.mac_tracker.web import run_mac_tracker_server
 from botka.middlewares import UserSyncMiddleware
 from botka.periodic import periodic_loop
 from botka.services.mac_tracker_service import mac_tracker_poll_loop
+from botka.services.planka_client import PlankaClient
+from botka.services.planka_poller import run_planka_poller
 
 
 async def _run() -> None:
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     settings = Settings()
     if not settings.mac_tracker_jwt_secret:
         settings.mac_tracker_jwt_secret = secrets.token_urlsafe(48)
@@ -56,6 +60,7 @@ async def _run() -> None:
     dp.include_router(borrowed.commands.router)
     dp.include_router(shopping.commands.router)
     dp.include_router(poll_commands.router)
+    dp.include_router(planka.commands.router)
     dp.include_router(shopping.messages.router)
     dp.include_router(shopping.callbacks.router)
     dp.include_router(borrowed.messages.router)
@@ -79,16 +84,22 @@ async def _run() -> None:
     )
     mac_web_task = asyncio.create_task(run_mac_tracker_server(settings, sessionmaker))
     periodic_task = asyncio.create_task(periodic_loop(bot, sessionmaker, settings))
+    planka_client = await container.get(PlankaClient)
+    planka_poller_task = asyncio.create_task(
+        run_planka_poller(bot, planka_client, settings)
+    )
     try:
         await dp.start_polling(bot)
     finally:
         mac_poll_task.cancel()
         mac_web_task.cancel()
         periodic_task.cancel()
+        planka_poller_task.cancel()
         await asyncio.gather(
             mac_poll_task,
             mac_web_task,
             periodic_task,
+            planka_poller_task,
             return_exceptions=True,
         )
         await container.close()

@@ -179,3 +179,11 @@ class MacTrackerDevice(Base):
     mac_address: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_ip: Mapped[str | None] = mapped_column(String(64))
+
+
+class PlankaCardMapping(Base):
+    __tablename__ = "planka_card_mappings"
+
+    short_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    planka_card_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+

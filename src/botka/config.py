@@ -9,6 +9,23 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     bot_token: str
     database_url: str
+
+    # Planka integration
+    planka_base_url: str | None = None
+    planka_username_or_email: str | None = None
+    planka_password: str | None = None
+    planka_card_type: str = "project"
+    planka_todo_list_id: str | None = None
+    planka_doing_list_id: str | None = None
+    planka_done_list_id: str | None = None
+    planka_request_timeout_seconds: float = 10.0
+    planka_notification_chat_ids: str | None = Field(
+        default=None,
+        description="Comma-separated: chat_id or chat_id:thread_id for topics",
+    )
+    planka_board_id: str | None = None
+    planka_board_name: str = "TASKS"
+    planka_poll_interval_seconds: float = 5.0
     shopping_chat_id: int | None = None
     shopping_topic_id: int | None = None
     borrowed_chat_id: int | None = None
@@ -50,6 +67,23 @@ class Settings(BaseSettings):
     mikrotik_password: str | None = None
     mikrotik_timeout_seconds: float = 5.0
     mikrotik_verify_tls: bool = False
+
+    def get_planka_notification_targets(self) -> list[tuple[str, int | None]]:
+        """Return [(chat_id, thread_id or None), ...] from BOTKA_PLANKA_NOTIFICATION_CHAT_IDS."""
+        targets: list[tuple[str, int | None]] = []
+        raw = self.planka_notification_chat_ids
+        if raw:
+            for part in raw.split(","):
+                part = part.strip()
+                if ":" in part:
+                    cid, tid = part.split(":", 1)
+                    try:
+                        targets.append((cid.strip(), int(tid.strip())))
+                    except ValueError:
+                        targets.append((part, None))
+                else:
+                    targets.append((part, None))
+        return targets
 
     model_config = SettingsConfigDict(
         env_file=".env",
