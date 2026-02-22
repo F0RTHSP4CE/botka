@@ -37,7 +37,7 @@ _TELEGRAM_MAX_CAPTION_LENGTH = 1024
 @inject
 async def boards_command(message: Message, svc: FromDishka[PlankaCommandService]) -> None:
     if not svc.is_configured:
-        await message.reply("Planka integration is not configured.", disable_notification=True)
+        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     try:
         boards = await svc.list_boards()
@@ -45,7 +45,7 @@ async def boards_command(message: Message, svc: FromDishka[PlankaCommandService]
         await _reply_planka_error(message, exc)
         return
     if not boards:
-        await message.reply("No boards were found for this Planka account.", disable_notification=True)
+        await message.reply("No boards were found for this Planka account.", disable_web_page_preview=True, disable_notification=True)
         return
     board_lists: dict[str, list[PlankaList]] = {}
     for b in boards[:20]:
@@ -73,10 +73,10 @@ async def todo_command(
     svc: FromDishka[PlankaCommandService],
 ) -> None:
     if not svc.is_configured:
-        await message.reply("Planka integration is not configured.", disable_notification=True)
+        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     if not svc.todo_list_id:
-        await message.reply("BOTKA_PLANKA_TODO_LIST_ID is not configured.", disable_notification=True)
+        await message.reply("BOTKA_PLANKA_TODO_LIST_ID is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
     try:
@@ -101,7 +101,7 @@ async def todo_command(
             photo_data=photo_data,
             media_group_id=message.media_group_id,
         )
-        await message.reply(_build_create_reply(result), disable_notification=True)
+        await message.reply(_build_create_reply(result), disable_web_page_preview=True, disable_notification=True)
     except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
         await _reply_planka_error(message, exc)
 
@@ -114,11 +114,11 @@ async def doing_command(
     svc: FromDishka[PlankaCommandService],
 ) -> None:
     if not svc.is_configured:
-        await message.reply("Planka integration is not configured.", disable_notification=True)
+        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
     if not args:
-        await message.reply("Usage: /doing {id}", disable_notification=True)
+        await message.reply("Usage: /doing {id}", disable_web_page_preview=True, disable_notification=True)
         return
     input_id = args.split()[0]
     try:
@@ -137,11 +137,11 @@ async def done_command(
     svc: FromDishka[PlankaCommandService],
 ) -> None:
     if not svc.is_configured:
-        await message.reply("Planka integration is not configured.", disable_notification=True)
+        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
     if not args:
-        await message.reply("Usage: /done {id}", disable_notification=True)
+        await message.reply("Usage: /done {id}", disable_web_page_preview=True, disable_notification=True)
         return
     input_id = args.split()[0]
     try:
@@ -160,11 +160,11 @@ async def task_command(
     svc: FromDishka[PlankaCommandService],
 ) -> None:
     if not svc.is_configured:
-        await message.reply("Planka integration is not configured.", disable_notification=True)
+        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
     if not args:
-        await message.reply("Usage: /task {id}", disable_notification=True)
+        await message.reply("Usage: /task {id}", disable_web_page_preview=True, disable_notification=True)
         return
     input_id = args.split()[0]
     try:
@@ -173,7 +173,7 @@ async def task_command(
         await _reply_planka_error(message, exc)
         return
     if not detail:
-        await message.reply(f"Task '{input_id}' was not found.", disable_notification=True)
+        await message.reply(f"Task '{input_id}' was not found.", disable_web_page_preview=True, disable_notification=True)
         return
     await _send_card_detail(message, detail)
 
@@ -212,7 +212,7 @@ async def checklist_toggle_callback(
     full_text = _build_card_detail_text(detail)
     keyboard = _build_checklist_keyboard(detail)
     try:
-        await callback.message.edit_text(full_text, parse_mode="HTML", reply_markup=keyboard)
+        await callback.message.edit_text(full_text, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True)
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             logger.warning("Failed to update checklist message: %s", exc)
@@ -251,15 +251,16 @@ async def _reply_planka_error(message: Message, exc: Exception) -> None:
     if isinstance(exc, PlankaAuthError):
         await message.reply(
             "Planka authentication failed. Check BOTKA_PLANKA_USERNAME_OR_EMAIL and BOTKA_PLANKA_PASSWORD.",
+            disable_web_page_preview=True,
             disable_notification=True,
         )
     elif isinstance(exc, PlankaClientError):
         logger.exception("Planka request failed")
-        await message.reply("Planka request failed. Please try again.", disable_notification=True)
+        await message.reply("Planka request failed. Please try again.", disable_web_page_preview=True, disable_notification=True)
     elif isinstance(exc, PlankaListNotConfiguredError):
-        await message.reply("The target list is not configured.", disable_notification=True)
+        await message.reply("The target list is not configured.", disable_web_page_preview=True, disable_notification=True)
     elif isinstance(exc, PlankaCardNotFoundError):
-        await message.reply(f"Task '{exc.input_id}' was not found.", disable_notification=True)
+        await message.reply(f"Task '{exc.input_id}' was not found.", disable_web_page_preview=True, disable_notification=True)
 
 
 async def _send_todo_list(
@@ -294,7 +295,7 @@ async def _send_move_reply(
 ) -> None:
     card_url = f"{base_url}/cards/{result.card_id}"
     link = f'<a href="{html.escape(card_url)}">{html.escape(result.card_name)}</a>'
-    await message.reply(f"{input_id} {link} {done_message}", parse_mode="HTML", disable_notification=True)
+    await message.reply(f"{input_id} {link} {done_message}", parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
 
 
 async def _send_card_detail(message: Message, detail: CardDetailResult) -> None:
@@ -304,7 +305,7 @@ async def _send_card_detail(message: Message, detail: CardDetailResult) -> None:
     # When there's an interactive checklist keyboard, always send text as a plain
     # message so the callback can always use edit_message_text. Photos go separately.
     if keyboard is not None or not detail.media_data:
-        await message.reply(full_text, parse_mode="HTML", reply_markup=keyboard, disable_notification=True)
+        await message.reply(full_text, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True, disable_notification=True)
         for data, filename in detail.media_data:
             try:
                 await message.answer_photo(BufferedInputFile(data, filename=filename), disable_notification=True)
@@ -315,7 +316,7 @@ async def _send_card_detail(message: Message, detail: CardDetailResult) -> None:
     # No checklist, with media — use caption when it fits
     caption_fits = len(full_text) <= _TELEGRAM_MAX_CAPTION_LENGTH
     if not caption_fits:
-        await message.reply(full_text, parse_mode="HTML", disable_notification=True)
+        await message.reply(full_text, parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
 
     if len(detail.media_data) == 1:
         data, filename = detail.media_data[0]
@@ -451,15 +452,15 @@ async def _reply_chunked(message: Message, lines: list[str]) -> None:
         candidate = f"{chunk}{safe_line}\n"
         if len(candidate) > _TELEGRAM_MAX_MESSAGE_LENGTH:
             if first:
-                await message.reply(chunk.rstrip(), parse_mode="HTML", disable_notification=True)
+                await message.reply(chunk.rstrip(), parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
                 first = False
             else:
-                await message.answer(chunk.rstrip(), parse_mode="HTML", disable_notification=True)
+                await message.answer(chunk.rstrip(), parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
             chunk = f"{safe_line}\n"
         else:
             chunk = candidate
     if chunk.strip():
         if first:
-            await message.reply(chunk.rstrip(), parse_mode="HTML", disable_notification=True)
+            await message.reply(chunk.rstrip(), parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
         else:
-            await message.answer(chunk.rstrip(), parse_mode="HTML", disable_notification=True)
+            await message.answer(chunk.rstrip(), parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
