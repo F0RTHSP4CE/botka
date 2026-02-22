@@ -13,7 +13,7 @@ from aiogram.filters.command import CommandObject
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.services.planka_client import PlankaAuthError, PlankaClientError, PlankaTaskList
+from botka.services.planka_client import PlankaAuthError, PlankaClientError, PlankaList, PlankaTaskList
 from botka.services.planka_command_service import (
     CardDetailResult,
     CardEntry,
@@ -47,8 +47,22 @@ async def boards_command(message: Message, svc: FromDishka[PlankaCommandService]
     if not boards:
         await message.reply("No boards were found for this Planka account.", disable_notification=True)
         return
-    lines = "\n".join(f"- {b.name} (id: {b.id})" for b in boards[:20])
-    await message.reply(f"Your boards:\n{lines}", disable_notification=True)
+    board_lists: dict[str, list[PlankaList]] = {}
+    for b in boards[:20]:
+        try:
+            board_lists[b.id] = await svc.get_board_lists(b.id)
+        except PlankaClientError:
+            board_lists[b.id] = []
+    all_lines: list[str] = ["<b>Your boards:</b>"]
+    for b in boards[:20]:
+        all_lines.append(f"\n<b>{html.escape(b.name)}</b> (id: <code>{html.escape(b.id)}</code>)")
+        lists = board_lists.get(b.id, [])
+        if lists:
+            for lst in lists:
+                all_lines.append(f"  - {html.escape(lst.name)} (id: <code>{html.escape(lst.id)}</code>)")
+        else:
+            all_lines.append("  (no lists)")
+    await _reply_chunked(message, all_lines)
 
 
 @router.message(Command("todo"))

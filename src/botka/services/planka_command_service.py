@@ -10,6 +10,7 @@ from botka.services.planka_album_tracker import PlankaAlbumTracker
 from botka.services.planka_client import (
     PlankaBoard,
     PlankaClient,
+    PlankaList,
     PlankaTaskList,
 )
 from botka.services.planka_mappings_service import PlankaCardMappingService
@@ -131,6 +132,9 @@ class PlankaCommandService:
 
     async def list_boards(self) -> list[PlankaBoard]:
         return await self._planka.list_boards()
+
+    async def get_board_lists(self, board_id: str) -> list[PlankaList]:
+        return await self._planka.get_board_lists(board_id)
 
     async def list_todos(self) -> list[tuple[str, list[CardEntry]]]:
         sections_cfg: list[tuple[str, str]] = [("TODO", self._settings.planka_todo_list_id)]  # type: ignore[list-item]
