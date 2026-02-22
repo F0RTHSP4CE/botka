@@ -135,8 +135,14 @@ class PlankaClient:
                 f"{self._base_url}/api/access-tokens",
                 json={"emailOrUsername": self._username_or_email, "password": self._password},
             )
-        if response.status_code in {401, 403}:
+        if response.status_code == 401:
             raise PlankaAuthError("Planka login failed: invalid credentials")
+        if response.status_code == 403:
+            try:
+                detail = response.json().get("message") or response.text[:200]
+            except ValueError:
+                detail = response.text[:200]
+            raise PlankaAuthError(f"Planka login forbidden: {detail}")
         if response.is_error:
             raise PlankaClientError(
                 f"Planka login failed: {response.status_code} {response.text[:200]}"
