@@ -66,10 +66,6 @@ async def mac_link_handler(
     if user is None:
         await message.reply("Could not load your user record.")
         return
-    tier = user.tier
-    if tier not in (UserTier.resident, UserTier.member):
-        await message.reply("Only residents and members can register devices.")
-        return
     token = await mac_tracker.create_token(user.id)
     url = settings.mac_tracker_base_url.rstrip("/") + f"/mac/{token}"
     try:
