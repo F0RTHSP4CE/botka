@@ -281,17 +281,23 @@ class PlankaCommandService:
 
             # Determine which event label to use based on target list
             if target_list_id == self._settings.planka_done_list_id:
-                event_line = f"Done by {actor_label} ({_now_label()})"
+                event_line: str | None = f"Done by {actor_label} ({_now_label()})"
             elif target_list_id == self._settings.planka_doing_list_id:
-                event_line = f"Taken by: {actor_label} ({_now_label()})"
+                # Skip annotation if the task is already taken by this actor
+                already_taken = _extract_assignee(current_description) == actor_label
+                event_line = None if already_taken else f"Taken by: {actor_label} ({_now_label()})"
             else:
                 event_line = f"Moved back by {actor_label} ({_now_label()})"
 
-            new_description = _append_meta_event(current_description, event_line)
-            try:
-                await self._planka.update_card(card_id, description=new_description)
-            except Exception:
-                logger.exception("Failed to annotate description for card %s", card_id)
+            if event_line is None:
+                new_description = current_description
+            else:
+                new_description = _append_meta_event(current_description, event_line)
+            if new_description != current_description:
+                try:
+                    await self._planka.update_card(card_id, description=new_description)
+                except Exception:
+                    logger.exception("Failed to annotate description for card %s", card_id)
 
         return MoveTaskResult(card_id=card_id, card_name=card_name)
 
