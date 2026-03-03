@@ -120,6 +120,11 @@ class PlankaClient:
     def is_configured(self) -> bool:
         return bool(self._base_url and self._username_or_email and self._password)
 
+    @property
+    def is_ready(self) -> bool:
+        """True only after start() has completed successfully."""
+        return self._client is not None
+
     async def start(self) -> None:
         token = await self._login()
         self._token = token

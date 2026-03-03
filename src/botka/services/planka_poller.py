@@ -25,6 +25,9 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
             "Planka poller disabled: BOTKA_PLANKA_NOTIFICATION_CHAT_IDS or BOTKA_PLANKA_BOARD_ID not set"
         )
         return
+    if not planka.is_ready:
+        logger.warning("Planka poller disabled: client did not start successfully")
+        return
 
     base_url = str(settings.planka_base_url)
     board_name = settings.planka_board_name
