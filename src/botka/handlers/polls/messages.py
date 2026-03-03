@@ -64,7 +64,7 @@ async def poll_message_handler(
     ignored_option_ids = register_poll_ignored_options(new_poll.poll.id, option_texts)
     closes_at = poll_close_at(
         datetime.now(timezone.utc),
-        close_days=settings.polls_default_close_days,
+        close_hours=settings.polls_default_close_hours,
     )
     target_users = list(await polls_service.list_target_users(parsed.audience))
     awaiting_text = build_awaiting_text(target_users, closes_at)

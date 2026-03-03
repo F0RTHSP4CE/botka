@@ -185,7 +185,7 @@ def format_remaining_time(closes_at: datetime, now: datetime | None = None) -> s
     return " ".join(parts)
 
 
-def poll_close_at(now: datetime | None = None, *, close_days: int = 7) -> datetime:
+def poll_close_at(now: datetime | None = None, *, close_hours: int = 168) -> datetime:
     if now is None:
         now = datetime.now(timezone.utc)
-    return now + timedelta(days=close_days)
+    return now + timedelta(hours=close_hours)
