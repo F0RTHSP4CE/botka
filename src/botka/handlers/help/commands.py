@@ -45,7 +45,14 @@ HELP_TEXT = (
     "  Example: /periodic_run poll_maintenance — refresh poll timers and auto-close due polls.\n"
     "\n"
     "Administration:\n"
-    "/user [&lt;resident|member|guest&gt; [&lt;telegram_id&gt;]] — view or set user tier (or reply)."
+    "/user [&lt;resident|member|guest&gt; [&lt;telegram_id&gt;]] — view or set user tier (or reply).\n"
+    "\n"
+    "Finance (refinance):\n"
+    "/transfer [@username | reply] &lt;amount&gt; &lt;currency&gt; [comment] — send money (creates a draft, you confirm).\n"
+    "/request [@username | reply] &lt;amount&gt; &lt;currency&gt; [comment] — request money from someone (they confirm or deny).\n"
+    "/balance [@username] — show balance and recent activity (yours or another person's).\n"
+    "/deposit &lt;amount&gt; &lt;currency&gt; — top up your balance with a card.\n"
+    "/transactions — show your last 10 transactions."
 )
 
 

@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     mikrotik_timeout_seconds: float = 5.0
     mikrotik_verify_tls: bool = False
 
+    # Refinance integration
+    refinance_api_url: str | None = None
+    refinance_secret_key: str | None = None
+    refinance_bot_entity_id: int | None = None
+
     def get_planka_notification_targets(self) -> list[tuple[str, int | None]]:
         """Return [(chat_id, thread_id or None), ...] from BOTKA_PLANKA_NOTIFICATION_CHAT_IDS."""
         targets: list[tuple[str, int | None]] = []

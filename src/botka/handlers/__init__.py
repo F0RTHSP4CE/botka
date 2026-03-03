@@ -6,6 +6,7 @@ __all__ = [
     "periodic",
     "pins",
     "planka",
+    "refinance",
     "shopping",
     "users",
 ]

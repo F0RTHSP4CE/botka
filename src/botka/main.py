@@ -21,6 +21,7 @@ from botka.handlers import (
     periodic,
     pins,
     planka,
+    refinance,
     shopping,
     users,
 )
@@ -54,6 +55,8 @@ async def _run() -> None:
     dp = Dispatcher()
     dp.include_router(help.commands.router)
     dp.include_router(users.commands.router)
+    dp.include_router(refinance.commands.router)
+    dp.include_router(refinance.callbacks.router)
     dp.include_router(doors.commands.router)
     dp.include_router(mac_tracker.commands.router)
     dp.include_router(mac_tracker.callbacks.router)

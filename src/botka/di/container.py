@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import AsyncIterable
 
 from dishka import AsyncContainer, Provider, Scope, make_async_container, provide
@@ -16,6 +17,7 @@ from botka.services.planka_command_service import PlankaCommandService
 from botka.services.planka_mappings_service import PlankaCardMappingService
 from botka.services.polls_service import PollsService
 from botka.services.shopping_list_service import ShoppingListService
+from botka.services.refinance_client import RefinanceClient
 from botka.services.user_service import UserService
 from botka.services.usbutler_service import UsbutlerService
 
@@ -90,10 +92,22 @@ class AppProvider(Provider):
             timeout_seconds=settings.planka_request_timeout_seconds,
         )
         if client.is_configured:
-            await client.start()
+            try:
+                await client.start()
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "Planka unavailable, integration disabled: %s", exc
+                )
         yield client
         if client.is_configured:
             await client.close()
+
+    @provide(scope=Scope.APP)
+    async def refinance_client(self, settings: Settings) -> AsyncIterable[RefinanceClient]:
+        client = RefinanceClient(settings)
+        if client.is_configured:
+            await client.verify_bot_entity()
+        yield client
 
     @provide(scope=Scope.APP)
     def planka_album_tracker(self) -> PlankaAlbumTracker:
