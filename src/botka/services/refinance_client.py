@@ -262,7 +262,7 @@ class RefinanceClient:
         limit: int = 20,
     ) -> list[dict]:
         params: dict[str, Any] = {
-            "entity_id": entity_id,
+            "from_entity_id": entity_id,
             "limit": limit,
             "skip": 0,
         }
