@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     pins_tracked_chat_ids: list[int] | str = Field(default_factory=list)
     bootstrap_resident_ids: list[int] | str = Field(default_factory=list)
     usbutler_base_url: str | None = None
-    usbutler_api_key: str | None = None
+    usbutler_token: str | None = None
     usbutler_timeout_seconds: float = 5.0
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"

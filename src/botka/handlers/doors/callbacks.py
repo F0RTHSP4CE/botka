@@ -52,10 +52,10 @@ async def open_door_callback(
                 reply_markup=None,
             )
         return
-    username = callback.from_user.username or str(callback.from_user.id)
+    on_behalf_of = callback.from_user.username or str(callback.from_user.id)
     if door_id == DOOR_BOTH_ID:
-        gate_opened = await usbutler_service.open_door(DOOR_GATE_ID, username)
-        main_opened = await usbutler_service.open_door(DOOR_MAIN_ID, username)
+        gate_opened = await usbutler_service.open_door(DOOR_GATE_ID, on_behalf_of)
+        main_opened = await usbutler_service.open_door(DOOR_MAIN_ID, on_behalf_of)
         label = door_label(door_id)
         if main_opened and gate_opened:
             opened = True
@@ -70,7 +70,7 @@ async def open_door_callback(
             status = ", ".join(status_parts)
             text = f"❌ Could not open all doors ({status})."
     else:
-        opened = await usbutler_service.open_door(door_id, username)
+        opened = await usbutler_service.open_door(door_id, on_behalf_of)
         label = door_label(door_id)
         if opened:
             text = f"✅ {label.capitalize()} opened."
