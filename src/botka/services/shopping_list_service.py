@@ -1,12 +1,36 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterable, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from botka.db.models import ShoppingItem, ShoppingNeedsPin
+
+_PENDING_TTL = 30.0  # seconds
+
+
+class ShoppingBuyConfirmationTracker:
+    """APP-scoped in-memory tracker for double-click buy confirmations."""
+
+    def __init__(self) -> None:
+        self._pending: dict[tuple[int, int], float] = {}  # (item_id, user_id) -> monotonic ts
+
+    def set_pending(self, item_id: int, user_id: int) -> None:
+        self._pending[(item_id, user_id)] = time.monotonic()
+
+    def check_and_clear(self, item_id: int, user_id: int) -> bool:
+        """Return True and clear the pending state if a valid pending confirmation exists."""
+        key = (item_id, user_id)
+        ts = self._pending.get(key)
+        if ts is None:
+            return False
+        del self._pending[key]
+        if time.monotonic() - ts > _PENDING_TTL:
+            return False
+        return True
 
 
 class ShoppingListService:

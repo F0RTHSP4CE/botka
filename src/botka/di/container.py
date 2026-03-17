@@ -16,7 +16,7 @@ from botka.services.planka_client import PlankaClient
 from botka.services.planka_command_service import PlankaCommandService
 from botka.services.planka_mappings_service import PlankaCardMappingService
 from botka.services.polls_service import PollsService
-from botka.services.shopping_list_service import ShoppingListService
+from botka.services.shopping_list_service import ShoppingListService, ShoppingBuyConfirmationTracker
 from botka.services.refinance_client import RefinanceClient
 from botka.services.user_service import UserService
 from botka.services.usbutler_service import UsbutlerService
@@ -53,6 +53,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def shopping_service(self, session: AsyncSession) -> ShoppingListService:
         return ShoppingListService(session)
+
+    @provide(scope=Scope.APP)
+    def shopping_confirmation_tracker(self) -> ShoppingBuyConfirmationTracker:
+        return ShoppingBuyConfirmationTracker()
 
     @provide(scope=Scope.REQUEST)
     def borrowed_items_service(self, session: AsyncSession) -> BorrowedItemsService:

@@ -10,7 +10,7 @@ from botka.config import Settings
 from botka.handlers.shopping.needs import build_needs_keyboard, pin_latest_needs
 from botka.handlers.user_links import format_user_link
 from botka.db.models import User, UserTier
-from botka.services.shopping_list_service import ShoppingListService
+from botka.services.shopping_list_service import ShoppingBuyConfirmationTracker, ShoppingListService
 
 router = Router(name=__name__)
 
@@ -21,10 +21,14 @@ async def buy_callback(
     callback: CallbackQuery,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    confirmation_tracker: FromDishka[ShoppingBuyConfirmationTracker],
     user_record: User | None = None,
 ) -> None:
     if callback.message is None:
         await callback.answer("No message context.", show_alert=True)
+        return
+    if callback.from_user is None:
+        await callback.answer("Unknown user.", show_alert=True)
         return
     tier = user_record.tier if user_record else UserTier.guest
     if tier not in (UserTier.resident, UserTier.member):
@@ -38,6 +42,12 @@ async def buy_callback(
         item_id = int(raw_id)
     except ValueError:
         await callback.answer("Invalid item.", show_alert=True)
+        return
+    if not confirmation_tracker.check_and_clear(item_id, callback.from_user.id):
+        confirmation_tracker.set_pending(item_id, callback.from_user.id)
+        await callback.answer(
+            "Tap again to confirm marking this item as bought.",
+        )
         return
     item = await shopping_service.mark_bought(item_id)
     if item is None:
