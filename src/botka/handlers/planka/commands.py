@@ -885,6 +885,23 @@ def _resolve_attachment_source(message: Message) -> Message | None:
     return None
 
 
+def _build_voice_memo_filename(file_unique_id: str) -> str:
+    return f"voice_memo_{file_unique_id}.ogg"
+
+
+def _is_voice_like_document(message: Message) -> bool:
+    document = message.document
+    if document is None:
+        return False
+    filename = (document.file_name or "").lower()
+    mime_type = (document.mime_type or "").lower()
+    return filename.endswith((".ogg", ".oga", ".opus")) or mime_type in {
+        "audio/ogg",
+        "application/ogg",
+        "audio/opus",
+    }
+
+
 async def _download_attachment_payloads(message: Message) -> list[tuple[str, bytes]]:
     source = _resolve_attachment_source(message)
     if source is None:
@@ -918,7 +935,10 @@ async def _download_single_attachment_payload(
 ) -> tuple[str, bytes] | None:
 
     if source.document:
-        filename = source.document.file_name or f"{source.document.file_unique_id}.bin"
+        if _is_voice_like_document(source):
+            filename = _build_voice_memo_filename(source.document.file_unique_id)
+        else:
+            filename = source.document.file_name or f"{source.document.file_unique_id}.bin"
         data = await _download_telegram_file_bytes(message, source.document)
         return (filename, data) if data else None
     if source.photo:
@@ -935,7 +955,8 @@ async def _download_single_attachment_payload(
         return (filename, data) if data else None
     if source.voice:
         data = await _download_telegram_file_bytes(message, source.voice)
-        return (f"{source.voice.file_unique_id}.ogg", data) if data else None
+        filename = _build_voice_memo_filename(source.voice.file_unique_id)
+        return (filename, data) if data else None
     if source.animation:
         filename = source.animation.file_name or f"{source.animation.file_unique_id}.gif"
         data = await _download_telegram_file_bytes(message, source.animation)
