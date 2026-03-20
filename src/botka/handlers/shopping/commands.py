@@ -9,6 +9,7 @@ from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
+from botka.db.models import User, UserTier
 from botka.handlers.user_links import format_user_link
 from botka.handlers.shopping.needs import (
     build_needs_keyboard,
@@ -27,9 +28,14 @@ async def need_handler(
     command: CommandObject,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
         await message.reply(html.escape("Unknown user."))
+        return
+    tier = user_record.tier if user_record else UserTier.guest
+    if tier not in (UserTier.resident, UserTier.member):
+        await message.reply("Only residents and members can manage the shopping list.")
         return
     text = (command.args or "").strip()
     if not text:

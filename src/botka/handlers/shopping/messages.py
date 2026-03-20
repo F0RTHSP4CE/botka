@@ -7,6 +7,7 @@ from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
+from botka.db.models import User, UserTier
 from botka.handlers.shopping.needs import pin_latest_needs
 from botka.handlers.user_links import format_user_link
 from botka.services.shopping_list_service import ShoppingListService
@@ -20,6 +21,7 @@ async def topic_list_handler(
     message: Message,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    user_record: User | None = None,
 ) -> None:
     if message.text is None:
         return
@@ -28,6 +30,10 @@ async def topic_list_handler(
     if message.message_thread_id != settings.shopping_topic_id:
         return
     if message.from_user is None:
+        return
+    tier = user_record.tier if user_record else UserTier.guest
+    if tier not in (UserTier.resident, UserTier.member):
+        await message.reply("Only residents and members can manage the shopping list.")
         return
     items = shopping_service.extract_dash_items(message.text)
     if not items:

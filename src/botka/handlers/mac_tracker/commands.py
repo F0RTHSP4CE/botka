@@ -89,7 +89,12 @@ async def status_handler(
     message: Message,
     user_service: FromDishka[UserService],
     mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
 ) -> None:
+    tier = user_record.tier if user_record else UserTier.guest
+    if tier not in (UserTier.resident, UserTier.member):
+        await message.reply("Only residents and members can view who is in the space.")
+        return
     presence = await mac_tracker.list_present_users()
     if not presence:
         await message.reply("No one is currently in the space.")
