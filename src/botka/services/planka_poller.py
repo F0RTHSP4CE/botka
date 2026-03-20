@@ -10,6 +10,7 @@ from aiogram import Bot
 
 from botka.config import Settings
 from botka.handlers.planka.notifications import notification_text
+from botka.handlers.user_links import format_telegram_username_link
 from botka.services.planka_client import PlankaActionEvent, PlankaClient, PlankaClientError, PlankaUser
 
 logger = logging.getLogger(__name__)
@@ -28,14 +29,6 @@ def _extract_telegram_username(description: str) -> str | None:
             if part.startswith("@"):
                 return part
     return None
-
-
-def _format_telegram_author(username: str) -> str:
-    clean_username = username.removeprefix("@")
-    href = f"https://t.me/{clean_username}"
-    display = f"@{clean_username}"
-    return f'<a href="{html.escape(href, quote=True)}">{html.escape(display)}</a>'
-
 
 def _format_planka_author(user_id: str | None, users: list[PlankaUser]) -> tuple[str, bool]:
     if not user_id:
@@ -62,7 +55,7 @@ async def _resolve_author(
             if detail:
                 tg_user = _extract_telegram_username(detail.description)
                 if tg_user:
-                    return _format_telegram_author(tg_user), True
+                    return format_telegram_username_link(tg_user), True
         except Exception:
             logger.debug("Could not fetch card description for action %s", action.id)
     return _format_planka_author(action.user_id, users)

@@ -26,6 +26,7 @@ from aiogram.types import (
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.db.models import User, UserTier
+from botka.handlers.user_links import format_telegram_username_link
 from botka.services.planka_client import PlankaAttachment, PlankaAuthError, PlankaClientError, PlankaList, PlankaTaskList
 from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
 from botka.services.planka_command_service import (
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 _TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 _ATTACH_MEDIA_GROUP_TTL_SECONDS = 600.0
 _TASK_SHORT_ID_IN_DETAIL_RE = re.compile(r"/(?:doing|done)\s+(\d+)\b")
+_TELEGRAM_USERNAME_RE = re.compile(r"(?<![\w/])@([A-Za-z0-9_]{5,32})\b")
 
 T = TypeVar("T")
 
@@ -512,7 +514,11 @@ async def _send_todo_list(
                 card_url = f"{base_url}/cards/{entry.card_id}"
                 link = f'<a href="{html.escape(card_url)}">{html.escape(entry.name)}</a>'
                 emojis = (" 🖼" if entry.has_images else "") + (" 📎" if entry.has_other_attachments else "")
-                assignee_part = f" by {html.escape(entry.assignee)}" if show_assignee and entry.assignee else ""
+                assignee_part = (
+                    f" by {_escape_html_with_telegram_links(entry.assignee)}"
+                    if show_assignee and entry.assignee
+                    else ""
+                )
                 all_lines.append(f"  {entry.short_id} {link}{emojis}{assignee_part}")
         all_lines.append("")
     all_lines.append("<i>/task id — view description and attachments </i>")
@@ -599,6 +605,17 @@ def _attachment_cache_key(attachment: PlankaAttachment) -> str:
 
 def _chunk_items(items: list[T], size: int) -> list[list[T]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _escape_html_with_telegram_links(text: str) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for match in _TELEGRAM_USERNAME_RE.finditer(text):
+        parts.append(html.escape(text[cursor : match.start()]))
+        parts.append(format_telegram_username_link(match.group(0)))
+        cursor = match.end()
+    parts.append(html.escape(text[cursor:]))
+    return "".join(parts)
 
 
 def _is_ogg_payload(data: bytes) -> bool:
@@ -745,17 +762,17 @@ async def _send_attachment_chunk(
 
 
 def _build_card_detail_text(detail: CardDetailResult) -> str:
-    parts: list[str] = [f"<b>{html.escape(detail.name)}</b>"]
+    parts: list[str] = [f"<b>{_escape_html_with_telegram_links(detail.name)}</b>"]
     orig, meta_lines = _split_card_description(detail.description)
     if orig.strip():
-        parts.append(f"\n{html.escape(_md_unescape(orig))}")
+        parts.append(f"\n{_escape_html_with_telegram_links(_md_unescape(orig))}")
     if detail.task_lists:
         for tl in detail.task_lists:
             parts.extend(_format_task_list(tl))
     if meta_lines:
         parts.append("")
         for ln in meta_lines:
-            parts.append(f"  {html.escape(_md_unescape(ln))}")
+            parts.append(f"  {_escape_html_with_telegram_links(_md_unescape(ln))}")
     parts.append(
         f"<i>use /doing {detail.short_id}, /done {detail.short_id} to take the task or mark done</i>"
     )
@@ -779,11 +796,11 @@ def _build_checklist_keyboard(detail: CardDetailResult) -> InlineKeyboardMarkup 
 def _format_task_list(tl: PlankaTaskList) -> list[str]:
     if not tl.tasks:
         return []
-    title = html.escape(tl.name or "Checklist")
+    title = _escape_html_with_telegram_links(tl.name or "Checklist")
     lines = [f"\n  <b>{title}:</b>"]
     for t in tl.tasks:
         prefix = "✅" if t.is_completed else "☑"
-        lines.append(f"  {prefix} {html.escape(t.name)}")
+        lines.append(f"  {prefix} {_escape_html_with_telegram_links(t.name)}")
     return lines
 
 
