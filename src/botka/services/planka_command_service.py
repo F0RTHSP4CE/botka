@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from botka.config import Settings
 from botka.services.planka_album_tracker import PlankaAlbumTracker
 from botka.services.planka_client import (
+    PlankaAttachment,
     PlankaBoard,
+    PlankaCard,
     PlankaClient,
     PlankaList,
     PlankaTaskList,
@@ -78,8 +80,10 @@ class CardEntry:
 @dataclass
 class CreateTodoResult:
     short_id: int
+    card_id: str
+    card_name: str
     items_created: int
-    has_attachment: bool
+    attachment_count: int
 
 
 @dataclass
@@ -89,12 +93,19 @@ class MoveTaskResult:
 
 
 @dataclass
+class AttachFileResult:
+    card_id: str
+    card_name: str
+    filename: str
+
+
+@dataclass
 class CardDetailResult:
     short_id: int
     name: str
     description: str
     task_lists: list[PlankaTaskList]
-    media_data: list[tuple[bytes, str]] = field(default_factory=list)
+    attachments: list[tuple[PlankaAttachment, bytes]] = field(default_factory=list)
 
 
 class PlankaCommandService:
@@ -141,43 +152,80 @@ class PlankaCommandService:
         if self._settings.planka_doing_list_id:
             sections_cfg.append(("IN PROGRESS", self._settings.planka_doing_list_id))
 
-        result: list[tuple[str, list[CardEntry]]] = []
-        for label, list_id in sections_cfg:
-            cards = await self._planka.get_cards(list_id)
-            entries: list[CardEntry] = []
-            for card in cards:
-                short_id = await self._mappings.get_or_create_short_id(card.id)
-                detail = await self._planka.get_card(card.id)
-                assignee = _extract_assignee(detail.description) if detail else None
-                entries.append(CardEntry(
-                    short_id=short_id,
-                    card_id=card.id,
-                    name=card.name,
-                    has_images=bool(detail and detail.attachments),
-                    has_other_attachments=bool(detail and detail.has_other_attachments),
-                    assignee=assignee,
-                ))
-            result.append((label, entries))
+        # Fetch cards from all sections concurrently.
+        fetch_coros = [self._planka.get_cards(list_id) for _, list_id in sections_cfg]
+        all_card_lists = await asyncio.gather(*fetch_coros)
 
-        if self._settings.planka_done_list_id:
-            done_cards = await self._planka.get_cards(self._settings.planka_done_list_id)
-            recent = done_cards[-3:]
-            done_entries: list[CardEntry] = []
-            for card in reversed(recent):
-                short_id = await self._mappings.get_or_create_short_id(card.id)
-                detail = await self._planka.get_card(card.id)
-                assignee = _extract_assignee(detail.description) if detail else None
-                done_entries.append(CardEntry(
-                    short_id=short_id,
-                    card_id=card.id,
-                    name=card.name,
-                    has_images=bool(detail and detail.attachments),
-                    has_other_attachments=bool(detail and detail.has_other_attachments),
-                    assignee=assignee,
-                ))
-            result.append(("DONE", done_entries))
+        section_card_lists = all_card_lists[: len(sections_cfg)]
+
+        # Collect all unique cards so we can batch-fetch their details.
+        seen_ids: set[str] = set()
+        unique_cards = []
+        for cards in section_card_lists:
+            for card in cards:
+                if card.id not in seen_ids:
+                    seen_ids.add(card.id)
+                    unique_cards.append(card)
+
+        detail_map: dict[str, object] = {}
+        short_id_map: dict[str, int] = {}
+        if unique_cards:
+            details_results, short_id_results = await asyncio.gather(
+                asyncio.gather(*[self._planka.get_card(c.id) for c in unique_cards], return_exceptions=True),
+                asyncio.gather(*[self._mappings.get_or_create_short_id(c.id) for c in unique_cards]),
+            )
+            for card, detail, short_id in zip(unique_cards, details_results, short_id_results):
+                detail_map[card.id] = None if isinstance(detail, Exception) else detail
+                short_id_map[card.id] = short_id
+
+        def _make_entry(card: PlankaCard) -> CardEntry:
+            detail = detail_map.get(card.id)
+            assignee = _extract_assignee(detail.description) if detail else None  # type: ignore[union-attr]
+            return CardEntry(
+                short_id=short_id_map[card.id],
+                card_id=card.id,
+                name=card.name,
+                has_images=bool(detail and detail.attachments),  # type: ignore[union-attr]
+                has_other_attachments=bool(detail and detail.has_other_attachments),  # type: ignore[union-attr]
+                assignee=assignee,
+            )
+
+        result: list[tuple[str, list[CardEntry]]] = []
+        for (label, _), cards in zip(sections_cfg, section_card_lists):
+            result.append((label, [_make_entry(c) for c in cards]))
 
         return result
+
+    async def list_recent_done(self, limit: int = 10) -> list[CardEntry]:
+        if not self._settings.planka_done_list_id:
+            raise PlankaListNotConfiguredError("DONE list is not configured")
+
+        done_cards = await self._planka.get_cards(self._settings.planka_done_list_id)
+        recent_cards = list(reversed(done_cards[-limit:]))
+
+        if not recent_cards:
+            return []
+
+        details_results, short_id_results = await asyncio.gather(
+            asyncio.gather(*[self._planka.get_card(c.id) for c in recent_cards], return_exceptions=True),
+            asyncio.gather(*[self._mappings.get_or_create_short_id(c.id) for c in recent_cards]),
+        )
+
+        entries: list[CardEntry] = []
+        for card, detail, short_id in zip(recent_cards, details_results, short_id_results):
+            safe_detail = None if isinstance(detail, Exception) else detail
+            assignee = _extract_assignee(safe_detail.description) if safe_detail else None
+            entries.append(
+                CardEntry(
+                    short_id=short_id,
+                    card_id=card.id,
+                    name=card.name,
+                    has_images=bool(safe_detail and safe_detail.attachments),
+                    has_other_attachments=bool(safe_detail and safe_detail.has_other_attachments),
+                    assignee=assignee,
+                )
+            )
+        return entries
 
     async def resolve_card_id(self, input_id: str) -> str | None:
         return await self._mappings.resolve_card_id(input_id)
@@ -188,6 +236,8 @@ class PlankaCommandService:
         checklist_items: list[str],
         list_id: str,
         *,
+        checklist_groups: list[tuple[str, list[str]]] | None = None,
+        description: str | None = None,
         actor: tuple[int, str | None] | None = None,
         photo_data: tuple[str, bytes] | None = None,
         media_group_id: str | None = None,
@@ -200,7 +250,10 @@ class PlankaCommandService:
 
         try:
             card = await self._planka.create_card(
-                list_id, name=card_name, card_type=self._settings.planka_card_type
+                list_id,
+                name=card_name,
+                description=description,
+                card_type=self._settings.planka_card_type,
             )
         except Exception:
             if media_group_id:
@@ -213,20 +266,29 @@ class PlankaCommandService:
         short_id = await self._mappings.get_or_create_short_id(card.id)
 
         items_created = 0
-        if checklist_items:
-            task_list = await self._planka.create_task_list(card.id)
-            for idx, item_name in enumerate(checklist_items):
-                await self._planka.create_task(
-                    task_list.id, name=item_name, position=_CHECKLIST_POSITION_STEP * (idx + 1)
-                )
-                items_created += 1
+        effective_groups = checklist_groups
+        if effective_groups is None and checklist_items:
+            effective_groups = [("Checklist", checklist_items)]
 
-        has_attachment = False
+        if effective_groups:
+            for group_name, group_items in effective_groups:
+                if not group_items:
+                    continue
+                task_list = await self._planka.create_task_list(card.id, name=group_name or "Checklist")
+                for idx, item_name in enumerate(group_items):
+                    await self._planka.create_task(
+                        task_list.id,
+                        name=item_name,
+                        position=_CHECKLIST_POSITION_STEP * (idx + 1),
+                    )
+                    items_created += 1
+
+        attachment_count = 0
         if photo_data:
             filename, file_bytes = photo_data
             try:
                 await self._planka.create_attachment(card.id, file_name=filename, file_bytes=file_bytes)
-                has_attachment = True
+                attachment_count = 1
             except Exception:
                 logger.exception("Failed to upload photo attachment for card %s", card.id)
 
@@ -246,7 +308,13 @@ class PlankaCommandService:
         if media_group_id:
             asyncio.create_task(self._expire_pending_album(media_group_id))
 
-        return CreateTodoResult(short_id=short_id, items_created=items_created, has_attachment=has_attachment)
+        return CreateTodoResult(
+            short_id=short_id,
+            card_id=card.id,
+            card_name=card.name,
+            items_created=items_created,
+            attachment_count=attachment_count,
+        )
 
     async def _expire_pending_album(self, media_group_id: str, delay: float = 3.0) -> None:
         await asyncio.sleep(delay)
@@ -255,11 +323,22 @@ class PlankaCommandService:
     def get_album_future(self, media_group_id: str) -> asyncio.Future[str] | None:
         return self._tracker.get(media_group_id)
 
-    async def upload_album_photo(self, card_id: str, filename: str, photo_bytes: bytes) -> None:
+    async def upload_album_photo(self, card_id: str, filename: str, photo_bytes: bytes) -> bool:
         try:
             await self._planka.create_attachment(card_id, file_name=filename, file_bytes=photo_bytes)
+            return True
         except Exception:
             logger.exception("Failed to upload album photo for card %s", card_id)
+            return False
+
+    async def attach_file(self, input_id: str, filename: str, file_bytes: bytes) -> AttachFileResult:
+        card_id = await self._mappings.resolve_card_id(input_id)
+        if not card_id:
+            raise PlankaCardNotFoundError(input_id)
+        detail = await self._planka.get_card(card_id)
+        card_name = detail.name if detail else input_id
+        await self._planka.create_attachment(card_id, file_name=filename, file_bytes=file_bytes)
+        return AttachFileResult(card_id=card_id, card_name=card_name, filename=filename)
 
     async def move_task(
         self,
@@ -313,17 +392,23 @@ class PlankaCommandService:
         if not detail:
             return None
         short_id = await self._mappings.get_or_create_short_id(detail.id)
-        media_data: list[tuple[bytes, str]] = []
-        for att in detail.attachments:
-            data = await self._planka.download_attachment(att.url)
-            if data:
-                media_data.append((data, att.name or "image.jpg"))
+        downloaded_attachments: list[tuple[PlankaAttachment, bytes]] = []
+        if detail.attachments:
+            download_results = await asyncio.gather(
+                *[self._planka.download_attachment(att.url) for att in detail.attachments],
+                return_exceptions=True,
+            )
+            downloaded_attachments = [
+                (att, data)
+                for data, att in zip(download_results, detail.attachments)
+                if isinstance(data, bytes) and data
+            ]
         return CardDetailResult(
             short_id=short_id,
             name=detail.name,
             description=detail.description,
             task_lists=detail.task_lists,
-            media_data=media_data,
+            attachments=downloaded_attachments,
         )
 
     async def toggle_checklist_item(

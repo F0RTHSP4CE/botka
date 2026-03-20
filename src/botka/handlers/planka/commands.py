@@ -5,16 +5,28 @@ import html
 import io
 import logging
 import re
+import time
+from typing import TypeVar
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaDocument,
+    InputMediaPhoto,
+    Message,
+)
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.services.planka_client import PlankaAuthError, PlankaClientError, PlankaList, PlankaTaskList
+from botka.services.planka_client import PlankaAttachment, PlankaAuthError, PlankaClientError, PlankaList, PlankaTaskList
+from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
 from botka.services.planka_command_service import (
+    AttachFileResult,
     CardDetailResult,
     CardEntry,
     CreateTodoResult,
@@ -28,7 +40,12 @@ router = Router(name=__name__)
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX_MESSAGE_LENGTH = 4096
-_TELEGRAM_MAX_CAPTION_LENGTH = 1024
+_ATTACH_MEDIA_GROUP_TTL_SECONDS = 600.0
+
+T = TypeVar("T")
+
+_ATTACH_MEDIA_GROUP_CACHE: dict[tuple[int, str], tuple[float, list[Message]]] = {}
+_ATTACH_MEDIA_GROUP_LOCK = asyncio.Lock()
 
 
 # --- Handlers ---
@@ -39,29 +56,43 @@ async def boards_command(message: Message, svc: FromDishka[PlankaCommandService]
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         boards = await svc.list_boards()
+        if not boards:
+            await loading_msg.delete()
+            await message.reply("No boards were found for this Planka account.", disable_web_page_preview=True, disable_notification=True)
+            return
+        board_list_results = await asyncio.gather(
+            *[svc.get_board_lists(b.id) for b in boards[:20]],
+            return_exceptions=True,
+        )
+        board_lists: dict[str, list[PlankaList]] = {}
+        for b, result in zip(boards[:20], board_list_results):
+            if isinstance(result, BaseException):
+                board_lists[b.id] = []
+            else:
+                board_lists[b.id] = result
     except PlankaClientError as exc:
+        await loading_msg.delete()
         await _reply_planka_error(message, exc)
         return
-    if not boards:
-        await message.reply("No boards were found for this Planka account.", disable_web_page_preview=True, disable_notification=True)
-        return
-    board_lists: dict[str, list[PlankaList]] = {}
-    for b in boards[:20]:
-        try:
-            board_lists[b.id] = await svc.get_board_lists(b.id)
-        except PlankaClientError:
-            board_lists[b.id] = []
     all_lines: list[str] = ["<b>Your boards:</b>"]
     for b in boards[:20]:
-        all_lines.append(f"\n<b>{html.escape(b.name)}</b> (id: <code>{html.escape(b.id)}</code>)")
+        board_url = f"{svc.base_url}/boards/{b.id}" if svc.base_url else ""
+        board_link = (
+            f'<a href="{html.escape(board_url)}">{html.escape(b.name)}</a>'
+            if board_url
+            else f"<b>{html.escape(b.name)}</b>"
+        )
+        all_lines.append(f"\n{board_link} (id: <code>{html.escape(b.id)}</code>)")
         lists = board_lists.get(b.id, [])
         if lists:
             for lst in lists:
                 all_lines.append(f"  - {html.escape(lst.name)} (id: <code>{html.escape(lst.id)}</code>)")
         else:
             all_lines.append("  (no lists)")
+    await loading_msg.delete()
     await _reply_chunked(message, all_lines)
 
 
@@ -71,6 +102,7 @@ async def todo_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
+    album: list[Message] | None = None,
 ) -> None:
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
@@ -79,9 +111,11 @@ async def todo_command(
         await message.reply("BOTKA_PLANKA_TODO_LIST_ID is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         if not args:
             sections = await svc.list_todos()
+            await loading_msg.delete()
             await _send_todo_list(message, sections, svc.base_url)
             return
         first_word = args.split()[0]
@@ -90,19 +124,53 @@ async def todo_command(
             if card_id:
                 actor = (message.from_user.id, message.from_user.username) if message.from_user else None
                 result = await svc.move_task(first_word, svc.todo_list_id, actor=actor, position_at_top=True)
+                await loading_msg.delete()
                 await _send_move_reply(message, first_word, result, "moved back to TODO", svc.base_url)
                 return
-        card_name, checklist_items = _parse_todo_args(args)
-        photo_data = await _download_photo(message)
+        card_name, card_description, checklist_groups = _parse_todo_args(args)
+        album_messages = album or [message]
+        album_photos = [m.photo[-1] for m in album_messages if m.photo]
+        photo_data: tuple[str, bytes] | None = None
+        if album_photos:
+            first_photo = album_photos[0]
+            data = await _download_telegram_file_bytes(message, first_photo)
+            if data:
+                photo_data = (f"{first_photo.file_unique_id}.jpg", data)
         actor = (message.from_user.id, message.from_user.username) if message.from_user else None
         result = await svc.create_todo(
-            card_name, checklist_items, svc.todo_list_id,
+            card_name,
+            [],
+            svc.todo_list_id,
+            checklist_groups=checklist_groups,
+            description=card_description,
             actor=actor,
             photo_data=photo_data,
             media_group_id=message.media_group_id,
         )
-        await message.reply(_build_create_reply(result), disable_web_page_preview=True, disable_notification=True)
+
+        # Upload remaining photos from the same media group (if any).
+        if len(album_photos) > 1:
+            extra_uploads = []
+            for photo in album_photos[1:]:
+                photo_bytes = await _download_telegram_file_bytes(message, photo)
+                if not photo_bytes:
+                    continue
+                extra_uploads.append(
+                    svc.upload_album_photo(result.card_id, f"{photo.file_unique_id}.jpg", photo_bytes)
+                )
+            if extra_uploads:
+                upload_results = await asyncio.gather(*extra_uploads)
+                result.attachment_count += sum(1 for ok in upload_results if ok)
+
+        await loading_msg.delete()
+        await message.reply(
+            _build_create_reply(result, svc.base_url),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
     except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
         await _reply_planka_error(message, exc)
 
 
@@ -121,11 +189,14 @@ async def doing_command(
         await message.reply("Usage: /doing {id}", disable_web_page_preview=True, disable_notification=True)
         return
     input_id = args.split()[0]
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         actor = (message.from_user.id, message.from_user.username) if message.from_user else None
         result = await svc.move_task(input_id, svc.doing_list_id, actor=actor)
+        await loading_msg.delete()
         await _send_move_reply(message, input_id, result, "moved to IN PROGRESS", svc.base_url)
     except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
         await _reply_planka_error(message, exc)
 
 
@@ -140,15 +211,20 @@ async def done_command(
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
-    if not args:
-        await message.reply("Usage: /done {id}", disable_web_page_preview=True, disable_notification=True)
-        return
-    input_id = args.split()[0]
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
+        if not args:
+            done_entries = await svc.list_recent_done(limit=10)
+            await loading_msg.delete()
+            await _send_todo_list(message, [("DONE", done_entries)], svc.base_url)
+            return
+        input_id = args.split()[0]
         actor = (message.from_user.id, message.from_user.username) if message.from_user else None
         result = await svc.move_task(input_id, svc.done_list_id, actor=actor)
+        await loading_msg.delete()
         await _send_move_reply(message, input_id, result, "marked as DONE", svc.base_url)
     except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
         await _reply_planka_error(message, exc)
 
 
@@ -158,6 +234,7 @@ async def task_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
+    attachment_cache: FromDishka[PlankaAttachmentCacheService],
 ) -> None:
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
@@ -167,15 +244,70 @@ async def task_command(
         await message.reply("Usage: /task {id}", disable_web_page_preview=True, disable_notification=True)
         return
     input_id = args.split()[0]
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         detail = await svc.get_card_detail(input_id)
     except PlankaClientError as exc:
+        await loading_msg.delete()
         await _reply_planka_error(message, exc)
         return
     if not detail:
+        await loading_msg.delete()
         await message.reply(f"Task '{input_id}' was not found.", disable_web_page_preview=True, disable_notification=True)
         return
-    await _send_card_detail(message, detail)
+    await loading_msg.delete()
+    await _send_card_detail(message, detail, attachment_cache)
+
+
+@router.message(Command("attach"))
+@inject
+async def attach_command(
+    message: Message,
+    command: CommandObject,
+    svc: FromDishka[PlankaCommandService],
+) -> None:
+    if not svc.is_configured:
+        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
+        return
+    args = (command.args or "").strip()
+    if not args:
+        await message.reply(
+            "Usage: /attach {id} (send with file or reply to a message with file)",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+    payloads = await _download_attachment_payloads(message)
+    if not payloads:
+        await message.reply(
+            "No attachment found. Send /attach {id} with a file or reply to a file message.",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+
+    input_id = args.split()[0]
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+    try:
+        first_name, first_bytes = payloads[0]
+        result = await svc.attach_file(input_id, first_name, first_bytes)
+        uploaded_count = 1
+        if len(payloads) > 1:
+            upload_results = await asyncio.gather(
+                *[
+                    svc.attach_file(input_id, name, data)
+                    for name, data in payloads[1:]
+                ],
+                return_exceptions=True,
+            )
+            uploaded_count += sum(1 for r in upload_results if not isinstance(r, Exception))
+    except (PlankaClientError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
+        await _reply_planka_error(message, exc)
+        return
+
+    await loading_msg.delete()
+    await _send_attach_reply(message, input_id, result, svc.base_url, uploaded_count)
 
 
 @router.callback_query(F.data.startswith("ptask:"))
@@ -245,6 +377,30 @@ async def album_continuation_handler(
         await svc.upload_album_photo(card_id, f"{photo.file_unique_id}.jpg", photo_bytes)
 
 
+@router.message(F.media_group_id)
+async def track_media_group_messages_for_attach(
+    message: Message,
+    album: list[Message] | None = None,
+) -> None:
+    if message.media_group_id is None:
+        return
+    key = (message.chat.id, message.media_group_id)
+    now = time.monotonic()
+    group_messages = album or [message]
+    async with _ATTACH_MEDIA_GROUP_LOCK:
+        # Opportunistic cleanup of expired groups.
+        expired = [k for k, (ts, _) in _ATTACH_MEDIA_GROUP_CACHE.items() if now - ts > _ATTACH_MEDIA_GROUP_TTL_SECONDS]
+        for k in expired:
+            _ATTACH_MEDIA_GROUP_CACHE.pop(k, None)
+
+        ts, messages = _ATTACH_MEDIA_GROUP_CACHE.get(key, (now, []))
+        messages.extend(group_messages)
+        # Keep by message_id uniqueness and chronological order.
+        uniq = {m.message_id: m for m in messages}
+        ordered = [uniq[mid] for mid in sorted(uniq)]
+        _ATTACH_MEDIA_GROUP_CACHE[key] = (now, ordered)
+
+
 # --- Presentation helpers ---
 
 async def _reply_planka_error(message: Message, exc: Exception) -> None:
@@ -282,7 +438,7 @@ async def _send_todo_list(
                 assignee_part = f" by {html.escape(entry.assignee)}" if show_assignee and entry.assignee else ""
                 all_lines.append(f"  {entry.short_id} {link}{emojis}{assignee_part}")
         all_lines.append("")
-    all_lines.append("<i> use /task id</i> to view description and images")
+    all_lines.append("<i>/task id — view description and attachments </i>")
     await _reply_chunked(message, all_lines)
 
 
@@ -298,51 +454,108 @@ async def _send_move_reply(
     await message.reply(f"{input_id} {link} {done_message}", parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
 
 
-async def _send_card_detail(message: Message, detail: CardDetailResult) -> None:
+async def _send_attach_reply(
+    message: Message,
+    input_id: str,
+    result: AttachFileResult,
+    base_url: str,
+    uploaded_count: int,
+) -> None:
+    card_url = f"{base_url}/cards/{result.card_id}"
+    link = f'<a href="{html.escape(card_url)}">{html.escape(result.card_name)}</a>'
+    files_part = f"{uploaded_count} file{'s' if uploaded_count != 1 else ''}"
+    await message.reply(
+        f"{input_id} attached {files_part} to {link}",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+        disable_notification=True,
+    )
+
+
+async def _send_card_detail(
+    message: Message,
+    detail: CardDetailResult,
+    attachment_cache: PlankaAttachmentCacheService,
+) -> None:
     full_text = _build_card_detail_text(detail)
     keyboard = _build_checklist_keyboard(detail)
+    await message.reply(
+        full_text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+        disable_notification=True,
+    )
+    await _send_attachment_groups(message, detail.attachments, attachment_cache)
 
-    # When there's an interactive checklist keyboard, always send text as a plain
-    # message so the callback can always use edit_message_text. Photos go separately.
-    if keyboard is not None or not detail.media_data:
-        await message.reply(full_text, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True, disable_notification=True)
-        for data, filename in detail.media_data:
-            try:
-                await message.answer_photo(BufferedInputFile(data, filename=filename), disable_notification=True)
-            except Exception:
-                logger.exception("Failed to send photo")
+
+def _attachment_cache_key(attachment: PlankaAttachment) -> str:
+    # Planka attachment IDs are stable for unchanged files.
+    return attachment.id
+
+
+def _chunk_items(items: list[T], size: int) -> list[list[T]]:
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+async def _send_attachment_groups(
+    message: Message,
+    attachments: list[tuple[PlankaAttachment, bytes]],
+    attachment_cache: PlankaAttachmentCacheService,
+) -> None:
+    if not attachments:
         return
 
-    # No checklist, with media — use caption when it fits
-    caption_fits = len(full_text) <= _TELEGRAM_MAX_CAPTION_LENGTH
-    if not caption_fits:
-        await message.reply(full_text, parse_mode="HTML", disable_web_page_preview=True, disable_notification=True)
+    image_items = [item for item in attachments if item[0].is_image]
+    document_items = [item for item in attachments if not item[0].is_image]
 
-    if len(detail.media_data) == 1:
-        data, filename = detail.media_data[0]
-        try:
-            if caption_fits:
-                await message.reply_photo(BufferedInputFile(data, filename=filename), caption=full_text, parse_mode="HTML", disable_notification=True)
+    for chunk in _chunk_items(image_items, 10):
+        await _send_attachment_chunk(message, chunk, attachment_cache, is_image=True)
+    for chunk in _chunk_items(document_items, 10):
+        await _send_attachment_chunk(message, chunk, attachment_cache, is_image=False)
+
+
+async def _send_attachment_chunk(
+    message: Message,
+    chunk: list[tuple[PlankaAttachment, bytes]],
+    attachment_cache: PlankaAttachmentCacheService,
+    *,
+    is_image: bool,
+) -> None:
+    cache_keys = [_attachment_cache_key(att) for att, _ in chunk]
+    cached_ids = await asyncio.gather(*[attachment_cache.get_file_id(k) for k in cache_keys])
+
+    def _build_media(use_cache: bool) -> list[InputMediaPhoto | InputMediaDocument]:
+        media: list[InputMediaPhoto | InputMediaDocument] = []
+        for (attachment, data), cached_file_id in zip(chunk, cached_ids):
+            filename = attachment.name or ("image.jpg" if is_image else "attachment.bin")
+            media_obj: str | BufferedInputFile
+            media_obj = cached_file_id if use_cache and cached_file_id else BufferedInputFile(data, filename=filename)
+            if is_image:
+                media.append(InputMediaPhoto(media=media_obj))
             else:
-                await message.answer_photo(BufferedInputFile(data, filename=filename), disable_notification=True)
-        except Exception:
-            logger.exception("Failed to send photo")
-    else:
-        photos: list[InputMediaPhoto] = [
-            InputMediaPhoto(
-                media=BufferedInputFile(data, filename=filename),
-                caption=full_text if i == 0 and caption_fits else None,
-                parse_mode="HTML" if i == 0 and caption_fits else None,
-            )
-            for i, (data, filename) in enumerate(detail.media_data[:10])
-        ]
+                media.append(InputMediaDocument(media=media_obj))
+        return media
+
+    try:
+        sent_messages = await message.answer_media_group(media=_build_media(use_cache=True), disable_notification=True)  # type: ignore[arg-type]
+    except TelegramBadRequest:
+        # A stale file_id can fail the whole group; clear cached ids and retry once with uploads.
+        for key, cached_file_id in zip(cache_keys, cached_ids):
+            if cached_file_id:
+                await attachment_cache.clear_file_id(key)
         try:
-            if caption_fits:
-                await message.reply_media_group(media=photos, disable_notification=True)  # type: ignore[arg-type]
-            else:
-                await message.answer_media_group(media=photos, disable_notification=True)  # type: ignore[arg-type]
+            sent_messages = await message.answer_media_group(media=_build_media(use_cache=False), disable_notification=True)  # type: ignore[arg-type]
         except Exception:
-            logger.exception("Failed to send media group")
+            logger.exception("Failed to send attachment chunk (%s)", "images" if is_image else "documents")
+            return
+
+    for (attachment, _), sent_message in zip(chunk, sent_messages):
+        cache_key = _attachment_cache_key(attachment)
+        if is_image and sent_message.photo:
+            await attachment_cache.set_file_id(cache_key, sent_message.photo[-1].file_id)
+        if not is_image and sent_message.document:
+            await attachment_cache.set_file_id(cache_key, sent_message.document.file_id)
 
 
 def _build_card_detail_text(detail: CardDetailResult) -> str:
@@ -351,7 +564,6 @@ def _build_card_detail_text(detail: CardDetailResult) -> str:
     if orig.strip():
         parts.append(f"\n{html.escape(_md_unescape(orig))}")
     if detail.task_lists:
-        parts.append("\n<b>Checklist:</b>")
         for tl in detail.task_lists:
             parts.extend(_format_task_list(tl))
     if meta_lines:
@@ -359,7 +571,7 @@ def _build_card_detail_text(detail: CardDetailResult) -> str:
         for ln in meta_lines:
             parts.append(f"  {html.escape(_md_unescape(ln))}")
     parts.append(
-        f"<i>use /doing {detail.short_id}, /done {detail.short_id} to take the quest or mark done</i>"
+        f"<i>use /doing {detail.short_id}, /done {detail.short_id} to take the task or mark done</i>"
     )
     return "\n".join(parts)
 
@@ -370,7 +582,7 @@ def _build_checklist_keyboard(detail: CardDetailResult) -> InlineKeyboardMarkup 
         return None
     buttons = [
         [InlineKeyboardButton(
-            text=("☑ " if t.is_completed else "☐ ") + t.name[:60],
+            text=("✅ " if t.is_completed else "☑ ") + t.name[:60],
             callback_data=f"ptask:{t.id}:{0 if t.is_completed else 1}:{detail.short_id}",
         )]
         for t in all_tasks
@@ -381,9 +593,10 @@ def _build_checklist_keyboard(detail: CardDetailResult) -> InlineKeyboardMarkup 
 def _format_task_list(tl: PlankaTaskList) -> list[str]:
     if not tl.tasks:
         return []
-    lines = []
+    title = html.escape(tl.name or "Checklist")
+    lines = [f"\n  <b>{title}:</b>"]
     for t in tl.tasks:
-        prefix = "☑" if t.is_completed else "☐"
+        prefix = "✅" if t.is_completed else "☑"
         lines.append(f"  {prefix} {html.escape(t.name)}")
     return lines
 
@@ -405,42 +618,167 @@ def _split_card_description(description: str) -> tuple[str, list[str]]:
     return description.rstrip(), []
 
 
-def _build_create_reply(result: CreateTodoResult) -> str:
+def _build_create_reply(result: CreateTodoResult, base_url: str) -> str:
     parts = []
     if result.items_created:
         parts.append(f"{result.items_created} item{'s' if result.items_created != 1 else ''}")
-    if result.has_attachment:
-        parts.append("1 attachment")
+    if result.attachment_count:
+        parts.append(
+            f"{result.attachment_count} attachment{'s' if result.attachment_count != 1 else ''}"
+        )
     suffix = f" ({', '.join(parts)})" if parts else ""
-    return f"task {result.short_id} created{suffix}"
+    card_url = f"{base_url}/cards/{result.card_id}" if base_url else ""
+    card_title = html.escape(result.card_name)
+    card_ref = f'<a href="{html.escape(card_url)}">{card_title}</a>' if card_url else card_title
+    return f"task {result.short_id} created: {card_ref}{suffix}"
 
 
-def _parse_todo_args(args: str) -> tuple[str, list[str]]:
-    lines = args.split("\n")
+def _parse_todo_args(args: str) -> tuple[str, str, list[tuple[str, list[str]]]]:
+    """Parse /todo payload into (title, description, checklist_items).
+
+        Title is always the first line.
+    Any subsequent lines that start with "- " become checklist items.
+    A non-bullet line ending with ':' starts a new checklist named by that line.
+    Remaining non-bullet lines are treated as description.
+    """
+    normalized = args.strip()
+    lines = normalized.split("\n")
     card_name = lines[0].strip()
-    checklist_items = [
-        line.strip()[2:].strip()
-        for line in lines[1:]
-        if line.strip().startswith("- ") and line.strip()[2:].strip()
-    ]
-    return card_name, checklist_items
+    rest_lines = lines[1:]
+
+    checklist_groups: list[tuple[str, list[str]]] = []
+    current_group_name = "Checklist"
+    current_group_items: list[str] = []
+
+    def _flush_group() -> None:
+        nonlocal current_group_items
+        if current_group_items:
+            checklist_groups.append((current_group_name, current_group_items))
+            current_group_items = []
+
+    description_lines: list[str] = []
+    for line in rest_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("- ") and stripped[2:].strip():
+            current_group_items.append(stripped[2:].strip())
+        elif stripped.endswith(":"):
+            _flush_group()
+            group_name = stripped[:-1].strip()
+            current_group_name = group_name if group_name else "Checklist"
+        else:
+            _flush_group()
+            description_lines.append(line.rstrip())
+
+    _flush_group()
+
+    card_description = "\n".join(description_lines).strip()
+    return card_name, card_description, checklist_groups
+
+
+def _message_has_attachment(message: Message | None) -> bool:
+    if message is None:
+        return False
+    return bool(
+        message.document
+        or message.photo
+        or message.video
+        or message.audio
+        or message.voice
+        or message.animation
+        or message.video_note
+    )
+
+
+def _resolve_attachment_source(message: Message) -> Message | None:
+    if _message_has_attachment(message):
+        return message
+    if _message_has_attachment(message.reply_to_message):
+        return message.reply_to_message
+    return None
+
+
+async def _download_attachment_payloads(message: Message) -> list[tuple[str, bytes]]:
+    source = _resolve_attachment_source(message)
+    if source is None:
+        return []
+
+    sources: list[Message] = [source]
+    if source.media_group_id:
+        key = (source.chat.id, source.media_group_id)
+        async with _ATTACH_MEDIA_GROUP_LOCK:
+            cached = _ATTACH_MEDIA_GROUP_CACHE.get(key)
+            if cached is not None:
+                sources = list(cached[1])
+
+    payloads: list[tuple[str, bytes]] = []
+    for src in sources:
+        payload = await _download_single_attachment_payload(message, src)
+        if payload is not None:
+            payloads.append(payload)
+
+    # De-duplicate by filename while preserving order.
+    unique: dict[str, tuple[str, bytes]] = {}
+    for filename, data in payloads:
+        if filename not in unique:
+            unique[filename] = (filename, data)
+    return list(unique.values())
+
+
+async def _download_single_attachment_payload(
+    message: Message,
+    source: Message,
+) -> tuple[str, bytes] | None:
+
+    if source.document:
+        filename = source.document.file_name or f"{source.document.file_unique_id}.bin"
+        data = await _download_telegram_file_bytes(message, source.document)
+        return (filename, data) if data else None
+    if source.photo:
+        photo = source.photo[-1]
+        data = await _download_telegram_file_bytes(message, photo)
+        return (f"{photo.file_unique_id}.jpg", data) if data else None
+    if source.video:
+        filename = source.video.file_name or f"{source.video.file_unique_id}.mp4"
+        data = await _download_telegram_file_bytes(message, source.video)
+        return (filename, data) if data else None
+    if source.audio:
+        filename = source.audio.file_name or f"{source.audio.file_unique_id}.mp3"
+        data = await _download_telegram_file_bytes(message, source.audio)
+        return (filename, data) if data else None
+    if source.voice:
+        data = await _download_telegram_file_bytes(message, source.voice)
+        return (f"{source.voice.file_unique_id}.ogg", data) if data else None
+    if source.animation:
+        filename = source.animation.file_name or f"{source.animation.file_unique_id}.gif"
+        data = await _download_telegram_file_bytes(message, source.animation)
+        return (filename, data) if data else None
+    if source.video_note:
+        data = await _download_telegram_file_bytes(message, source.video_note)
+        return (f"{source.video_note.file_unique_id}.mp4", data) if data else None
+    return None
 
 
 async def _download_photo(message: Message) -> tuple[str, bytes] | None:
     if not message.photo:
         return None
     photo = message.photo[-1]
-    data = await _download_photo_bytes(message, photo)
+    data = await _download_telegram_file_bytes(message, photo)
     return (f"{photo.file_unique_id}.jpg", data) if data else None
 
 
 async def _download_photo_bytes(message: Message, photo: object) -> bytes | None:
+    return await _download_telegram_file_bytes(message, photo)
+
+
+async def _download_telegram_file_bytes(message: Message, file_obj: object) -> bytes | None:
     try:
         buf = io.BytesIO()
-        await message.bot.download(photo, destination=buf)  # type: ignore[union-attr]
+        await message.bot.download(file_obj, destination=buf)  # type: ignore[union-attr]
         return buf.getvalue() or None
     except Exception:
-        logger.exception("Failed to download photo")
+        logger.exception("Failed to download attachment")
         return None
 
 

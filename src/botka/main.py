@@ -30,7 +30,7 @@ from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import commands as poll_commands
 from botka.handlers.polls import messages as poll_messages
 from botka.mac_tracker.web import run_mac_tracker_server
-from botka.middlewares import UserSyncMiddleware
+from botka.middlewares import MediaGroupCollectorMiddleware, UserSyncMiddleware
 from botka.periodic import periodic_loop
 from botka.services.mac_tracker_service import mac_tracker_poll_loop
 from botka.services.planka_client import PlankaClient
@@ -78,6 +78,7 @@ async def _run() -> None:
 
     sessionmaker = await container.get(async_sessionmaker)
     user_sync = UserSyncMiddleware(sessionmaker, settings)
+    dp.message.middleware(MediaGroupCollectorMiddleware())
     dp.message.middleware(user_sync)
     dp.message.middleware(NewTopicForwardMiddleware(settings))
     dp.callback_query.middleware(user_sync)

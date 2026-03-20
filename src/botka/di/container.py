@@ -12,6 +12,7 @@ from botka.services.borrowed_item_detector import BorrowedItemDetector
 from botka.services.borrowed_items_service import BorrowedItemsService
 from botka.services.mac_tracker_service import MacTrackerService, MikrotikDhcpClient
 from botka.services.planka_album_tracker import PlankaAlbumTracker
+from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
 from botka.services.planka_client import PlankaClient
 from botka.services.planka_command_service import PlankaCommandService
 from botka.services.planka_mappings_service import PlankaCardMappingService
@@ -120,6 +121,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def planka_mappings_service(self, session: AsyncSession) -> PlankaCardMappingService:
         return PlankaCardMappingService(session)
+
+    @provide(scope=Scope.REQUEST)
+    def planka_attachment_cache_service(self, session: AsyncSession) -> PlankaAttachmentCacheService:
+        return PlankaAttachmentCacheService(session)
 
     @provide(scope=Scope.REQUEST)
     def planka_command_service(

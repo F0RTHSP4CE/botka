@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -50,6 +51,7 @@ class PlankaAttachment:
     id: str
     name: str
     url: str = ""
+    is_image: bool = False
 
 
 @dataclass
@@ -58,7 +60,7 @@ class PlankaCardDetail:
     name: str
     description: str
     task_lists: list[PlankaTaskList]
-    attachments: list[PlankaAttachment]  # image attachments only
+    attachments: list[PlankaAttachment]
     has_other_attachments: bool = False
 
 
@@ -253,20 +255,18 @@ class PlankaClient:
                 id=str(att["id"]),
                 name=str(att.get("name") or ""),
                 url=str((att.get("data") or {}).get("url") or ""),
+                is_image=any(
+                    str(att.get("name") or "").lower().endswith(ext)
+                    for ext in _IMAGE_EXTENSIONS
+                ),
             )
             for att in all_raw_attachments
-            if isinstance(att, dict)
-            and att.get("id")
-            and any(str(att.get("name") or "").lower().endswith(ext) for ext in _IMAGE_EXTENSIONS)
+            if isinstance(att, dict) and att.get("id")
         ]
         has_other_attachments = any(
             True
-            for att in all_raw_attachments
-            if isinstance(att, dict)
-            and att.get("id")
-            and not any(
-                str(att.get("name") or "").lower().endswith(ext) for ext in _IMAGE_EXTENSIONS
-            )
+            for att in attachments
+            if not att.is_image
         )
 
         return PlankaCardDetail(
@@ -385,12 +385,13 @@ class PlankaClient:
         card_id: str,
         file_name: str,
         file_bytes: bytes,
-        content_type: str = "image/jpeg",
+        content_type: str | None = None,
     ) -> None:
+        resolved_content_type = content_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
         await self._post_multipart(
             f"/api/cards/{card_id}/attachments",
             data={"type": "file", "name": file_name},
-            files={"file": (file_name, file_bytes, content_type)},
+            files={"file": (file_name, file_bytes, resolved_content_type)},
         )
 
     async def _get_json(self, path: str) -> Any:

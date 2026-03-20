@@ -187,3 +187,14 @@ class PlankaCardMapping(Base):
     short_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     planka_card_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
 
+
+class PlankaAttachmentTelegramCache(Base):
+    __tablename__ = "planka_attachment_telegram_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    planka_attachment_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    telegram_file_id: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
