@@ -115,6 +115,7 @@ async def todo_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
+    attachment_cache: FromDishka[PlankaAttachmentCacheService],
     album: list[Message] | None = None,
     user_record: User | None = None,
 ) -> None:
@@ -128,67 +129,24 @@ async def todo_command(
         await message.reply("BOTKA_PLANKA_TODO_LIST_ID is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
     args = (command.args or "").strip()
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
-    try:
-        if not args:
+    if not args:
+        loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+        try:
             sections = await svc.list_todos()
+        except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
             await loading_msg.delete()
-            await _send_todo_list(message, sections, svc.base_url)
+            await _reply_planka_error(message, exc)
             return
-        first_word = args.split()[0]
-        if first_word.isdigit():
-            card_id = await svc.resolve_card_id(first_word)
-            if card_id:
-                actor = (message.from_user.id, message.from_user.username) if message.from_user else None
-                result = await svc.move_task(first_word, svc.todo_list_id, actor=actor, position_at_top=True)
-                await loading_msg.delete()
-                await _send_move_reply(message, first_word, result, "moved back to TODO", svc.base_url)
-                return
-        card_name, card_description, checklist_groups = _parse_todo_args(args)
-        album_messages = album or [message]
-        album_photos = [m.photo[-1] for m in album_messages if m.photo]
-        photo_data: tuple[str, bytes] | None = None
-        if album_photos:
-            first_photo = album_photos[0]
-            data = await _download_telegram_file_bytes(message, first_photo)
-            if data:
-                photo_data = (f"{first_photo.file_unique_id}.jpg", data)
-        actor = (message.from_user.id, message.from_user.username) if message.from_user else None
-        result = await svc.create_todo(
-            card_name,
-            [],
-            svc.todo_list_id,
-            checklist_groups=checklist_groups,
-            description=card_description,
-            actor=actor,
-            photo_data=photo_data,
-            media_group_id=message.media_group_id,
-        )
-
-        # Upload remaining photos from the same media group (if any).
-        if len(album_photos) > 1:
-            extra_uploads = []
-            for photo in album_photos[1:]:
-                photo_bytes = await _download_telegram_file_bytes(message, photo)
-                if not photo_bytes:
-                    continue
-                extra_uploads.append(
-                    svc.upload_album_photo(result.card_id, f"{photo.file_unique_id}.jpg", photo_bytes)
-                )
-            if extra_uploads:
-                upload_results = await asyncio.gather(*extra_uploads)
-                result.attachment_count += sum(1 for ok in upload_results if ok)
-
         await loading_msg.delete()
-        await message.reply(
-            _build_create_reply(result, svc.base_url),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-    except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
-        await loading_msg.delete()
-        await _reply_planka_error(message, exc)
+        await _send_todo_list(message, sections, svc.base_url)
+        return
+
+    task_lookup_input = _parse_task_lookup_input(args)
+    if task_lookup_input is not None:
+        await _send_task_detail_for_input(message, task_lookup_input, svc, attachment_cache)
+        return
+
+    await _create_todo_from_text(message, args, svc, album)
 
 
 @router.message(Command("doing"))
@@ -260,6 +218,7 @@ async def task_command(
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
     attachment_cache: FromDishka[PlankaAttachmentCacheService],
+    album: list[Message] | None = None,
     user_record: User | None = None,
 ) -> None:
     if not _can_use_planka(user_record):
@@ -270,22 +229,16 @@ async def task_command(
         return
     args = (command.args or "").strip()
     if not args:
-        await message.reply("Usage: /task {id}", disable_web_page_preview=True, disable_notification=True)
+        await message.reply("Usage: /task {id|text}", disable_web_page_preview=True, disable_notification=True)
         return
-    input_id = args.split()[0]
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
-    try:
-        detail = await svc.get_card_detail(input_id)
-    except PlankaClientError as exc:
-        await loading_msg.delete()
-        await _reply_planka_error(message, exc)
+    task_lookup_input = _parse_task_lookup_input(args)
+    if task_lookup_input is not None:
+        await _send_task_detail_for_input(message, task_lookup_input, svc, attachment_cache)
         return
-    if not detail:
-        await loading_msg.delete()
-        await message.reply(f"Task '{input_id}' was not found.", disable_web_page_preview=True, disable_notification=True)
+    if not svc.todo_list_id:
+        await message.reply("BOTKA_PLANKA_TODO_LIST_ID is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
-    await loading_msg.delete()
-    await _send_card_detail(message, detail, attachment_cache)
+    await _create_todo_from_text(message, args, svc, album)
 
 
 @router.message(Command("attach"))
@@ -473,6 +426,91 @@ async def track_media_group_messages_for_attach(
 def _can_use_planka(user_record: User | None) -> bool:
     tier = user_record.tier if user_record else UserTier.guest
     return tier in (UserTier.resident, UserTier.member)
+
+
+def _parse_task_lookup_input(args: str) -> str | None:
+    parts = args.split()
+    if len(parts) == 1 and parts[0].isdigit():
+        return parts[0]
+    return None
+
+
+def _actor_from_message(message: Message) -> tuple[int, str | None] | None:
+    return (message.from_user.id, message.from_user.username) if message.from_user else None
+
+
+async def _send_task_detail_for_input(
+    message: Message,
+    input_id: str,
+    svc: PlankaCommandService,
+    attachment_cache: PlankaAttachmentCacheService,
+) -> None:
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+    try:
+        detail = await svc.get_card_detail(input_id)
+    except PlankaClientError as exc:
+        await loading_msg.delete()
+        await _reply_planka_error(message, exc)
+        return
+    if not detail:
+        await loading_msg.delete()
+        await message.reply(f"Task '{input_id}' was not found.", disable_web_page_preview=True, disable_notification=True)
+        return
+    await loading_msg.delete()
+    await _send_card_detail(message, detail, attachment_cache)
+
+
+async def _create_todo_from_text(
+    message: Message,
+    args: str,
+    svc: PlankaCommandService,
+    album: list[Message] | None = None,
+) -> None:
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+    try:
+        card_name, card_description, checklist_groups = _parse_todo_args(args)
+        album_messages = album or [message]
+        album_photos = [m.photo[-1] for m in album_messages if m.photo]
+        photo_data: tuple[str, bytes] | None = None
+        if album_photos:
+            first_photo = album_photos[0]
+            data = await _download_telegram_file_bytes(message, first_photo)
+            if data:
+                photo_data = (f"{first_photo.file_unique_id}.jpg", data)
+        result = await svc.create_todo(
+            card_name,
+            [],
+            svc.todo_list_id,
+            checklist_groups=checklist_groups,
+            description=card_description,
+            actor=_actor_from_message(message),
+            photo_data=photo_data,
+            media_group_id=message.media_group_id,
+        )
+
+        if len(album_photos) > 1:
+            extra_uploads = []
+            for photo in album_photos[1:]:
+                photo_bytes = await _download_telegram_file_bytes(message, photo)
+                if not photo_bytes:
+                    continue
+                extra_uploads.append(
+                    svc.upload_album_photo(result.card_id, f"{photo.file_unique_id}.jpg", photo_bytes)
+                )
+            if extra_uploads:
+                upload_results = await asyncio.gather(*extra_uploads)
+                result.attachment_count += sum(1 for ok in upload_results if ok)
+
+        await loading_msg.delete()
+        await message.reply(
+            _build_create_reply(result, svc.base_url),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+    except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
+        await _reply_planka_error(message, exc)
 
 
 async def _reply_planka_access_denied(message: Message) -> None:
