@@ -4,9 +4,11 @@ import asyncio
 import html
 import io
 import logging
+import mimetypes
 import re
 import time
 from typing import TypeVar
+from urllib.parse import urlparse
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -42,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 _ATTACH_MEDIA_GROUP_TTL_SECONDS = 600.0
+_TASK_SHORT_ID_IN_DETAIL_RE = re.compile(r"/(?:doing|done)\s+(\d+)\b")
 
 T = TypeVar("T")
 
@@ -317,18 +320,45 @@ async def attach_command(
     input_id = args.split()[0]
     loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
-        first_name, first_bytes = payloads[0]
-        result = await svc.attach_file(input_id, first_name, first_bytes)
-        uploaded_count = 1
-        if len(payloads) > 1:
-            upload_results = await asyncio.gather(
-                *[
-                    svc.attach_file(input_id, name, data)
-                    for name, data in payloads[1:]
-                ],
-                return_exceptions=True,
-            )
-            uploaded_count += sum(1 for r in upload_results if not isinstance(r, Exception))
+        result, uploaded_count = await _attach_payloads_to_task(svc, input_id, payloads)
+    except (PlankaClientError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
+        await _reply_planka_error(message, exc)
+        return
+
+    await loading_msg.delete()
+    await _send_attach_reply(message, input_id, result, svc.base_url, uploaded_count)
+
+
+@router.message(F.reply_to_message)
+@inject
+async def reply_attach_to_task_handler(
+    message: Message,
+    svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
+) -> None:
+    if not _can_use_planka(user_record):
+        return
+    if not svc.is_configured:
+        return
+    if message.text and message.text.startswith("/"):
+        return
+
+    payloads = await _download_attachment_payloads(message)
+    if not payloads:
+        return
+
+    reply = message.reply_to_message
+    if reply is None or (reply.from_user and not reply.from_user.is_bot):
+        return
+
+    input_id = _extract_task_short_id_from_message(reply)
+    if not input_id:
+        return
+
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+    try:
+        result, uploaded_count = await _attach_payloads_to_task(svc, input_id, payloads)
     except (PlankaClientError, PlankaCardNotFoundError) as exc:
         await loading_msg.delete()
         await _reply_planka_error(message, exc)
@@ -519,6 +549,32 @@ async def _send_attach_reply(
     )
 
 
+async def _attach_payloads_to_task(
+    svc: PlankaCommandService,
+    input_id: str,
+    payloads: list[tuple[str, bytes]],
+) -> tuple[AttachFileResult, int]:
+    first_name, first_bytes = payloads[0]
+    result = await svc.attach_file(input_id, first_name, first_bytes)
+    uploaded_count = 1
+    if len(payloads) > 1:
+        upload_results = await asyncio.gather(
+            *[
+                svc.attach_file(input_id, name, data)
+                for name, data in payloads[1:]
+            ],
+            return_exceptions=True,
+        )
+        uploaded_count += sum(1 for r in upload_results if not isinstance(r, Exception))
+    return result, uploaded_count
+
+
+def _extract_task_short_id_from_message(message: Message) -> str | None:
+    text = message.text or message.caption or ""
+    match = _TASK_SHORT_ID_IN_DETAIL_RE.search(text)
+    return match.group(1) if match else None
+
+
 async def _send_card_detail(
     message: Message,
     detail: CardDetailResult,
@@ -545,6 +601,11 @@ def _chunk_items(items: list[T], size: int) -> list[list[T]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
+def _is_ogg_payload(data: bytes) -> bool:
+    # OGG container files start with "OggS" magic bytes.
+    return len(data) >= 4 and data[:4] == b"OggS"
+
+
 async def _send_attachment_groups(
     message: Message,
     attachments: list[tuple[PlankaAttachment, bytes]],
@@ -554,12 +615,40 @@ async def _send_attachment_groups(
         return
 
     image_items = [item for item in attachments if item[0].is_image]
-    document_items = [item for item in attachments if not item[0].is_image]
+    voice_items = [
+        item
+        for item in attachments
+        if not item[0].is_image and (_is_voice_attachment(item[0]) or _is_ogg_payload(item[1]))
+    ]
+    document_items = [
+        item
+        for item in attachments
+        if not item[0].is_image and not _is_voice_attachment(item[0])
+    ]
 
     for chunk in _chunk_items(image_items, 10):
-        await _send_attachment_chunk(message, chunk, attachment_cache, is_image=True)
+        await _send_attachment_chunk(message, chunk, attachment_cache, media_kind="image")
+    for item in voice_items:
+        await _send_attachment_chunk(message, [item], attachment_cache, media_kind="voice")
     for chunk in _chunk_items(document_items, 10):
-        await _send_attachment_chunk(message, chunk, attachment_cache, is_image=False)
+        await _send_attachment_chunk(message, chunk, attachment_cache, media_kind="document")
+
+
+def _is_voice_attachment(attachment: PlankaAttachment) -> bool:
+    name = attachment.name or ""
+    url = attachment.url or ""
+    url_path = urlparse(url).path if url else ""
+
+    # Planka may strip/alter display names, so inspect both name and URL.
+    candidates = [name.lower(), url_path.lower()]
+    if any(candidate.endswith((".ogg", ".oga", ".opus")) for candidate in candidates):
+        return True
+
+    guessed_mimes = {
+        mimetypes.guess_type(name)[0],
+        mimetypes.guess_type(url_path)[0],
+    }
+    return any(mime in {"audio/ogg", "application/ogg", "audio/opus"} for mime in guessed_mimes)
 
 
 async def _send_attachment_chunk(
@@ -567,18 +656,68 @@ async def _send_attachment_chunk(
     chunk: list[tuple[PlankaAttachment, bytes]],
     attachment_cache: PlankaAttachmentCacheService,
     *,
-    is_image: bool,
+    media_kind: str,
 ) -> None:
+    if not chunk:
+        return
+
     cache_keys = [_attachment_cache_key(att) for att, _ in chunk]
     cached_ids = await asyncio.gather(*[attachment_cache.get_file_id(k) for k in cache_keys])
+
+    if media_kind == "voice":
+        for (attachment, data), cache_key, cached_file_id in zip(chunk, cache_keys, cached_ids):
+            filename = attachment.name or "voice.ogg"
+            used_cached = bool(cached_file_id)
+            try:
+                sent_message = await message.answer_voice(
+                    voice=cached_file_id or BufferedInputFile(data, filename=filename),
+                    disable_notification=True,
+                )
+            except TelegramBadRequest:
+                if not cached_file_id:
+                    logger.exception("Failed to send .ogg attachment as voice: %s", filename)
+                    continue
+                await attachment_cache.clear_file_id(cache_key)
+                try:
+                    sent_message = await message.answer_voice(
+                        voice=BufferedInputFile(data, filename=filename),
+                        disable_notification=True,
+                    )
+                except Exception:
+                    logger.exception("Failed to send .ogg attachment as voice: %s", filename)
+                    continue
+            except Exception:
+                logger.exception("Failed to send .ogg attachment as voice: %s", filename)
+                continue
+
+            # A stale cached id can return a non-voice message without raising.
+            if used_cached and not sent_message.voice:
+                await attachment_cache.clear_file_id(cache_key)
+                try:
+                    sent_message = await message.answer_voice(
+                        voice=BufferedInputFile(data, filename=filename),
+                        disable_notification=True,
+                    )
+                except Exception:
+                    logger.exception("Failed to resend .ogg attachment as voice after cache clear: %s", filename)
+                    continue
+
+            if sent_message.voice:
+                await attachment_cache.set_file_id(cache_key, sent_message.voice.file_id)
+            else:
+                logger.warning(
+                    "sendVoice returned non-voice message for attachment %s (mime may be unsupported for voice)",
+                    filename,
+                )
+        return
 
     def _build_media(use_cache: bool) -> list[InputMediaPhoto | InputMediaDocument]:
         media: list[InputMediaPhoto | InputMediaDocument] = []
         for (attachment, data), cached_file_id in zip(chunk, cached_ids):
-            filename = attachment.name or ("image.jpg" if is_image else "attachment.bin")
+            filename = attachment.name or ("image.jpg" if media_kind == "image" else "attachment.bin")
             media_obj: str | BufferedInputFile
             media_obj = cached_file_id if use_cache and cached_file_id else BufferedInputFile(data, filename=filename)
-            if is_image:
+            if media_kind == "image":
                 media.append(InputMediaPhoto(media=media_obj))
             else:
                 media.append(InputMediaDocument(media=media_obj))
@@ -594,14 +733,14 @@ async def _send_attachment_chunk(
         try:
             sent_messages = await message.answer_media_group(media=_build_media(use_cache=False), disable_notification=True)  # type: ignore[arg-type]
         except Exception:
-            logger.exception("Failed to send attachment chunk (%s)", "images" if is_image else "documents")
+            logger.exception("Failed to send attachment chunk (%s)", media_kind)
             return
 
     for (attachment, _), sent_message in zip(chunk, sent_messages):
         cache_key = _attachment_cache_key(attachment)
-        if is_image and sent_message.photo:
+        if media_kind == "image" and sent_message.photo:
             await attachment_cache.set_file_id(cache_key, sent_message.photo[-1].file_id)
-        if not is_image and sent_message.document:
+        if media_kind == "document" and sent_message.document:
             await attachment_cache.set_file_id(cache_key, sent_message.document.file_id)
 
 
