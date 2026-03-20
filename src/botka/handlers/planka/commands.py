@@ -285,7 +285,7 @@ async def attach_command(
     await _send_attach_reply(message, input_id, result, svc.base_url, uploaded_count)
 
 
-@router.message(F.reply_to_message)
+@router.message(F.reply_to_message & ~F.pinned_message)
 @inject
 async def reply_attach_to_task_handler(
     message: Message,
