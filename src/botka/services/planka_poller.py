@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 
 from aiogram import Bot
@@ -29,20 +30,27 @@ def _extract_telegram_username(description: str) -> str | None:
     return None
 
 
-def _format_planka_author(user_id: str | None, users: list[PlankaUser]) -> str:
+def _format_telegram_author(username: str) -> str:
+    clean_username = username.removeprefix("@")
+    href = f"https://t.me/{clean_username}"
+    display = f"@{clean_username}"
+    return f'<a href="{html.escape(href, quote=True)}">{html.escape(display)}</a>'
+
+
+def _format_planka_author(user_id: str | None, users: list[PlankaUser]) -> tuple[str, bool]:
     if not user_id:
-        return "Unknown"
+        return "Unknown", False
     for u in users:
         if u.id == user_id:
-            return u.username or u.name
-    return "Unknown"
+            return html.escape(u.username or u.name), False
+    return "Unknown", False
 
 
 async def _resolve_author(
     action: PlankaActionEvent,
     users: list[PlankaUser],
     planka: PlankaClient,
-) -> str:
+) -> tuple[str, bool]:
     """Return the human-readable author for an action.
 
     When the acting Planka user is the bot itself, the card description is fetched
@@ -54,7 +62,7 @@ async def _resolve_author(
             if detail:
                 tg_user = _extract_telegram_username(detail.description)
                 if tg_user:
-                    return tg_user
+                    return _format_telegram_author(tg_user), True
         except Exception:
             logger.debug("Could not fetch card description for action %s", action.id)
     return _format_planka_author(action.user_id, users)
@@ -97,11 +105,10 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
             for action in reversed(new_actions):  # oldest-first
                 if action.type not in _RELEVANT_TYPES:
                     continue
-                author = await _resolve_author(action, page.users, planka)
-                text = notification_text(action, board_name, base_url, author)
+                author_html, silent = await _resolve_author(action, page.users, planka)
+                text = notification_text(action, board_name, base_url, author_html)
                 if not text:
                     continue
-                silent = author.startswith("@")
                 for chat_id, thread_id in targets:
                     try:
                         await bot.send_message(

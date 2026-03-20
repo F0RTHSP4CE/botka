@@ -11,7 +11,7 @@ def notification_text(
     action: PlankaActionEvent,
     board_name: str,
     base_url: str,
-    author: str,
+    author_html: str,
 ) -> str | None:
     """Return HTML-formatted notification text, or None if the action is not notifiable."""
     card_url = f"{base_url.rstrip('/')}/cards/{action.card_id}" if action.card_id else base_url
@@ -19,7 +19,7 @@ def notification_text(
 
     if action.type == "createCard" and action.to_list:
         list_name = html.escape(action.to_list.name)
-        return f"{link} created in <b>{list_name}</b> by {html.escape(author)}"
+        return f"{link} created in <b>{list_name}</b> by {author_html}"
 
     if action.type == "moveCard" and action.to_list:
         to_name = (
@@ -27,6 +27,6 @@ def notification_text(
             if action.to_list.type == "trash" or action.to_list.name == "?"
             else action.to_list.name
         )
-        return f"{link} moved to <b>{html.escape(to_name)}</b> by {html.escape(author)}"
+        return f"{link} moved to <b>{html.escape(to_name)}</b> by {author_html}"
 
     return None
