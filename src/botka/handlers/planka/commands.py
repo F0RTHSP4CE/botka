@@ -23,6 +23,7 @@ from aiogram.types import (
 )
 from dishka.integrations.aiogram import FromDishka, inject
 
+from botka.db.models import User, UserTier
 from botka.services.planka_client import PlankaAttachment, PlankaAuthError, PlankaClientError, PlankaList, PlankaTaskList
 from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
 from botka.services.planka_command_service import (
@@ -52,7 +53,14 @@ _ATTACH_MEDIA_GROUP_LOCK = asyncio.Lock()
 
 @router.message(Command("boards"))
 @inject
-async def boards_command(message: Message, svc: FromDishka[PlankaCommandService]) -> None:
+async def boards_command(
+    message: Message,
+    svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
+) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
@@ -103,7 +111,11 @@ async def todo_command(
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
     album: list[Message] | None = None,
+    user_record: User | None = None,
 ) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
@@ -180,7 +192,11 @@ async def doing_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
 ) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
@@ -206,7 +222,11 @@ async def done_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
 ) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
@@ -235,7 +255,11 @@ async def task_command(
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
     attachment_cache: FromDishka[PlankaAttachmentCacheService],
+    user_record: User | None = None,
 ) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
@@ -265,7 +289,11 @@ async def attach_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
 ) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
     if not svc.is_configured:
         await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
         return
@@ -315,9 +343,16 @@ async def attach_command(
 async def checklist_toggle_callback(
     callback: CallbackQuery,
     svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
 ) -> None:
     if callback.message is None or callback.data is None:
         await callback.answer()
+        return
+    if not _can_use_planka(user_record):
+        await callback.answer(
+            "Only residents and members can use Planka.",
+            show_alert=True,
+        )
         return
     parts = callback.data.split(":", 3)
     if len(parts) != 4:
@@ -402,6 +437,18 @@ async def track_media_group_messages_for_attach(
 
 
 # --- Presentation helpers ---
+
+def _can_use_planka(user_record: User | None) -> bool:
+    tier = user_record.tier if user_record else UserTier.guest
+    return tier in (UserTier.resident, UserTier.member)
+
+
+async def _reply_planka_access_denied(message: Message) -> None:
+    await message.reply(
+        "Only residents and members can use task tracker.",
+        disable_web_page_preview=True,
+        disable_notification=True,
+    )
 
 async def _reply_planka_error(message: Message, exc: Exception) -> None:
     if isinstance(exc, PlankaAuthError):

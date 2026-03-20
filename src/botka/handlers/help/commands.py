@@ -32,7 +32,7 @@ HELP_TEXT = (
     "Polls:\n"
     "/poll_close [&lt;poll_id&gt;] — close a poll you created (or reply to the poll/awaiting message).\n"
     "\n"
-    "Tasks:\n"
+    "Tasks (residents/members):\n"
     "/todo [&lt;task_name&gt;] — create a task in TODO or list TODO/IN PROGRESS tasks.\n"
     "/task &lt;id&gt; — show full task details (title, description, checklist, attachments).\n"
     "/attach &lt;id&gt; — attach a file to task (send file with command or reply to file).\n"
