@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 from dataclasses import dataclass, field
@@ -118,6 +119,7 @@ class PlankaClient:
         self._client: httpx.AsyncClient | None = None
         self._token: str | None = None
         self._own_user_id: str | None = None
+        self._start_lock = asyncio.Lock()
 
     @property
     def is_configured(self) -> bool:
@@ -134,6 +136,8 @@ class PlankaClient:
         return self._own_user_id
 
     async def start(self) -> None:
+        if self._client is not None:
+            return
         token = await self._login()
         self._token = token
         self._client = httpx.AsyncClient(
@@ -423,7 +427,7 @@ class PlankaClient:
         path: str,
         payload: dict[str, Any] | None = None,
     ) -> Any:
-        client = self._require_client()
+        client = await self._require_client()
         try:
             response = await client.request(method, path, json=payload)
         except httpx.TimeoutException as exc:
@@ -438,7 +442,7 @@ class PlankaClient:
         data: dict[str, str],
         files: dict[str, tuple[str, bytes, str]],
     ) -> Any:
-        client = self._require_client()
+        client = await self._require_client()
         try:
             response = await client.post(path, data=data, files=files)
         except httpx.TimeoutException as exc:
@@ -469,7 +473,22 @@ class PlankaClient:
             )
             raise PlankaClientError("Planka API returned invalid JSON") from exc
 
-    def _require_client(self) -> httpx.AsyncClient:
+    async def _require_client(self) -> httpx.AsyncClient:
+        if self._client is not None:
+            return self._client
+
+        if not self.is_configured:
+            raise PlankaClientError("Planka client is not configured")
+
+        async with self._start_lock:
+            if self._client is None:
+                try:
+                    await self.start()
+                except Exception as exc:
+                    raise PlankaClientError(
+                        "Planka client is unavailable; failed to initialize"
+                    ) from exc
+
         if self._client is None:
-            raise RuntimeError("PlankaClient was used before start() was called")
+            raise PlankaClientError("Planka client failed to initialize")
         return self._client
