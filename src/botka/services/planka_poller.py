@@ -34,7 +34,7 @@ def _format_planka_author(user_id: str | None, users: list[PlankaUser]) -> str:
         return "Unknown"
     for u in users:
         if u.id == user_id:
-            return f"@{u.username}" if u.username else u.name
+            return u.username or u.name
     return "Unknown"
 
 
@@ -110,6 +110,7 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
                             parse_mode="HTML",
                             message_thread_id=thread_id,
                             disable_notification=silent,
+                            link_preview_options={"is_disabled": True},
                         )
                     except Exception:
                         logger.exception(
