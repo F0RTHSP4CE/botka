@@ -117,6 +117,7 @@ class PlankaClient:
         self._timeout_seconds = timeout_seconds
         self._client: httpx.AsyncClient | None = None
         self._token: str | None = None
+        self._own_user_id: str | None = None
 
     @property
     def is_configured(self) -> bool:
@@ -127,6 +128,11 @@ class PlankaClient:
         """True only after start() has completed successfully."""
         return self._client is not None
 
+    @property
+    def own_user_id(self) -> str | None:
+        """Planka user ID of the bot account, set after start()."""
+        return self._own_user_id
+
     async def start(self) -> None:
         token = await self._login()
         self._token = token
@@ -135,6 +141,14 @@ class PlankaClient:
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
             timeout=httpx.Timeout(self._timeout_seconds),
         )
+        try:
+            me = await self._get_json("/api/users/me")
+            if isinstance(me, dict):
+                item = me.get("item") or {}
+                if item.get("id"):
+                    self._own_user_id = str(item["id"])
+        except Exception:
+            logger.warning("Could not fetch own Planka user ID")
 
     async def _login(self) -> str:
         async with httpx.AsyncClient(timeout=httpx.Timeout(self._timeout_seconds)) as client:

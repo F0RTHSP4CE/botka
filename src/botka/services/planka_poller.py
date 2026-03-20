@@ -9,11 +9,55 @@ from aiogram import Bot
 
 from botka.config import Settings
 from botka.handlers.planka.notifications import notification_text
-from botka.services.planka_client import PlankaClient, PlankaClientError
+from botka.services.planka_client import PlankaActionEvent, PlankaClient, PlankaClientError, PlankaUser
 
 logger = logging.getLogger(__name__)
 
 _RELEVANT_TYPES = frozenset({"createCard", "moveCard"})
+_DESCRIPTION_SEPARATOR = "\n\n---\n"
+
+
+def _extract_telegram_username(description: str) -> str | None:
+    """Extract the last @username from botka metadata appended to the card description."""
+    if _DESCRIPTION_SEPARATOR not in description:
+        return None
+    _, meta = description.split(_DESCRIPTION_SEPARATOR, 1)
+    for line in reversed(meta.splitlines()):
+        for part in line.split():
+            if part.startswith("@"):
+                return part
+    return None
+
+
+def _format_planka_author(user_id: str | None, users: list[PlankaUser]) -> str:
+    if not user_id:
+        return "Unknown"
+    for u in users:
+        if u.id == user_id:
+            return f"@{u.username}" if u.username else u.name
+    return "Unknown"
+
+
+async def _resolve_author(
+    action: PlankaActionEvent,
+    users: list[PlankaUser],
+    planka: PlankaClient,
+) -> str:
+    """Return the human-readable author for an action.
+
+    When the acting Planka user is the bot itself, the card description is fetched
+    to recover the Telegram username of whoever triggered the command.
+    """
+    if action.user_id and action.user_id == planka.own_user_id and action.card_id:
+        try:
+            detail = await planka.get_card(action.card_id)
+            if detail:
+                tg_user = _extract_telegram_username(detail.description)
+                if tg_user:
+                    return tg_user
+        except Exception:
+            logger.debug("Could not fetch card description for action %s", action.id)
+    return _format_planka_author(action.user_id, users)
 
 
 async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) -> None:
@@ -53,9 +97,11 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
             for action in reversed(new_actions):  # oldest-first
                 if action.type not in _RELEVANT_TYPES:
                     continue
-                text = notification_text(action, board_name, base_url, page.users)
+                author = await _resolve_author(action, page.users, planka)
+                text = notification_text(action, board_name, base_url, author)
                 if not text:
                     continue
+                silent = author.startswith("@")
                 for chat_id, thread_id in targets:
                     try:
                         await bot.send_message(
@@ -63,6 +109,7 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
                             text=text,
                             parse_mode="HTML",
                             message_thread_id=thread_id,
+                            disable_notification=silent,
                         )
                     except Exception:
                         logger.exception(
