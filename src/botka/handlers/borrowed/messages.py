@@ -9,7 +9,6 @@ from aiogram import F, Router
 from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.config import Settings
 from botka.handlers.borrowed.utils import build_return_keyboard
 from botka.handlers.user_links import format_user_link
 from botka.services.borrowed_item_detector import BorrowedItemDetector
@@ -124,20 +123,10 @@ async def _process_media_group(
 @inject
 async def borrowed_message_handler(
     message: Message,
-    settings: FromDishka[Settings],
     borrowed_service: FromDishka[BorrowedItemsService],
     detector: FromDishka[BorrowedItemDetector],
 ) -> None:
     if message.from_user is None:
-        return
-    if settings.borrowed_topic_id is None:
-        return
-    if message.message_thread_id != settings.borrowed_topic_id:
-        return
-    if (
-        settings.borrowed_chat_id is not None
-        and message.chat.id != settings.borrowed_chat_id
-    ):
         return
     group_id = message.media_group_id
     if group_id:

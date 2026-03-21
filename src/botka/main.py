@@ -4,7 +4,7 @@ import asyncio
 import logging
 import secrets
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from dishka.integrations.aiogram import setup_dishka
@@ -43,6 +43,29 @@ async def _run() -> None:
     settings = Settings()
     if not settings.mac_tracker_jwt_secret:
         settings.mac_tracker_jwt_secret = secrets.token_urlsafe(48)
+
+    # Routing topology lives here — each router is scoped to its chat/topic
+    # before being registered, so handler bodies contain only domain logic.
+    if settings.borrowed_topic_id is not None:
+        borrowed.messages.router.message.filter(
+            F.message_thread_id == settings.borrowed_topic_id
+        )
+        if settings.borrowed_chat_id is not None:
+            borrowed.messages.router.message.filter(
+                F.chat.id == settings.borrowed_chat_id
+            )
+    if settings.shopping_topic_id is not None:
+        shopping.messages.router.message.filter(
+            F.message_thread_id == settings.shopping_topic_id
+        )
+        if settings.shopping_chat_id is not None:
+            shopping.messages.router.message.filter(
+                F.chat.id == settings.shopping_chat_id
+            )
+    pins.messages.router.message.filter(
+        F.chat.id.in_(settings.pins_tracked_chat_ids)
+    )
+
     container = build_container(settings)
 
     engine = await container.get(AsyncEngine)

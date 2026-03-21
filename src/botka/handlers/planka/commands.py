@@ -285,7 +285,26 @@ async def attach_command(
     await _send_attach_reply(message, input_id, result, svc.base_url, uploaded_count)
 
 
-@router.message(F.reply_to_message & ~F.pinned_message)
+@router.message(
+    F.reply_to_message
+    & ~F.pinned_message
+    & (
+        F.document
+        | F.photo
+        | F.video
+        | F.audio
+        | F.voice
+        | F.animation
+        | F.video_note
+        | F.reply_to_message.document
+        | F.reply_to_message.photo
+        | F.reply_to_message.video
+        | F.reply_to_message.audio
+        | F.reply_to_message.voice
+        | F.reply_to_message.animation
+        | F.reply_to_message.video_note
+    )
+)
 @inject
 async def reply_attach_to_task_handler(
     message: Message,

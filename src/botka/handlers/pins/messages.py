@@ -40,13 +40,6 @@ _NEW_TOPIC_MG_TASKS: dict[str, asyncio.Task[None]] = {}
 _NEW_TOPIC_MG_DELAY = 1.5  # seconds to wait for remaining album items
 
 
-def _is_tracked_chat(settings: Settings, chat_id: int) -> bool:
-    return (
-        bool(settings.pins_tracked_chat_ids)
-        and chat_id in settings.pins_tracked_chat_ids
-    )
-
-
 def _build_message_link(chat: Chat, message_id: int) -> str | None:
     if chat.username:
         return f"https://t.me/{chat.username}/{message_id}"
@@ -284,8 +277,6 @@ async def forum_topic_created_handler(
 ) -> None:
     if settings.pins_chat_id is None:
         return
-    if not _is_tracked_chat(settings, message.chat.id):
-        return
 
     topic = message.forum_topic_created
     if topic is None:
@@ -424,8 +415,6 @@ async def track_media_group_messages(
         return
     if settings.pins_chat_id is None:
         return
-    if not _is_tracked_chat(settings, message.chat.id):
-        return
     key = (message.chat.id, message.media_group_id)
     async with _MEDIA_GROUP_LOCK:
         _MEDIA_GROUP_CACHE.setdefault(key, []).append(message.message_id)
@@ -444,8 +433,6 @@ async def pinned_message_handler(
     if pinned is None:
         return
     if settings.pins_chat_id is None:
-        return
-    if not _is_tracked_chat(settings, message.chat.id):
         return
     if (
         settings.shopping_chat_id is not None

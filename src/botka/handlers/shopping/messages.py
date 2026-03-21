@@ -25,10 +25,6 @@ async def topic_list_handler(
 ) -> None:
     if message.text is None:
         return
-    if settings.shopping_topic_id is None:
-        return
-    if message.message_thread_id != settings.shopping_topic_id:
-        return
     if message.from_user is None:
         return
     tier = user_record.tier if user_record else UserTier.guest
