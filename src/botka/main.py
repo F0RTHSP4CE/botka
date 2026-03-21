@@ -92,6 +92,7 @@ async def _run() -> None:
     planka_poller_task = asyncio.create_task(
         run_planka_poller(bot, planka_client, settings)
     )
+    await bot.delete_webhook(drop_pending_updates=True)
     try:
         await dp.start_polling(bot)
     finally:
