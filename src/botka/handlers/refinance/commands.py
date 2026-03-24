@@ -18,6 +18,12 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
+from botka.handlers.refinance.shared import (
+    format_split_card,
+    parse_split_id,
+    resolve_self,
+    split_keyboard,
+)
 from botka.services.refinance_client import RefinanceClient
 from botka.services.user_service import UserService
 
@@ -51,15 +57,6 @@ def _parse_amount_currency(parts: list[str]) -> tuple[str, str] | None:
         return None
 
 
-async def _resolve_self(
-    client: RefinanceClient,
-    telegram_id: int,
-    username: str | None,
-) -> dict | None:
-    try:
-        return await client.get_or_link_entity(telegram_id, username)
-    except Exception:
-        return None
 
 
 async def _resolve_target_by_username(
@@ -169,13 +166,13 @@ async def transfer_handler(
 
     if username_arg:
         actor_entity, target_entity = await asyncio.gather(
-            _resolve_self(refinance, message.from_user.id, message.from_user.username),
+            resolve_self(refinance, message.from_user.id, message.from_user.username),
             _resolve_target_by_username(refinance, user_service, username_arg),
         )
         target_label = username_arg
     else:
         actor_entity, target_entity = await asyncio.gather(
-            _resolve_self(refinance, message.from_user.id, message.from_user.username),
+            resolve_self(refinance, message.from_user.id, message.from_user.username),
             _resolve_target_by_telegram_id(
                 refinance, reply_user.id, reply_user.username  # type: ignore[union-attr]
             ),
@@ -289,13 +286,13 @@ async def request_handler(
 
     if username_arg:
         actor_entity, payer_entity = await asyncio.gather(
-            _resolve_self(refinance, message.from_user.id, message.from_user.username),
+            resolve_self(refinance, message.from_user.id, message.from_user.username),
             _resolve_target_by_username(refinance, user_service, username_arg),
         )
         payer_label = username_arg
     else:
         actor_entity, payer_entity = await asyncio.gather(
-            _resolve_self(refinance, message.from_user.id, message.from_user.username),
+            resolve_self(refinance, message.from_user.id, message.from_user.username),
             _resolve_target_by_telegram_id(
                 refinance, reply_user.id, reply_user.username  # type: ignore[union-attr]
             ),
@@ -414,7 +411,7 @@ async def balance_handler(
             return
         viewing_other = True
     else:
-        entity = await _resolve_self(
+        entity = await resolve_self(
             refinance, message.from_user.id, message.from_user.username
         )
         if entity is None:
@@ -514,7 +511,7 @@ async def deposit_handler(
         return
     amount, currency = parsed
 
-    entity = await _resolve_self(
+    entity = await resolve_self(
         refinance, message.from_user.id, message.from_user.username
     )
     if entity is None:
@@ -590,7 +587,7 @@ async def transactions_handler(
         await message.reply(_NOT_CONFIGURED)
         return
 
-    entity = await _resolve_self(
+    entity = await resolve_self(
         refinance, message.from_user.id, message.from_user.username
     )
     if entity is None:
@@ -629,3 +626,319 @@ async def transactions_handler(
             await message.reply(text)
     else:
         await message.reply(text)
+
+
+# ------------------------------------------------------------------ #
+# Split helpers                                                         #
+# ------------------------------------------------------------------ #
+
+
+def _parse_amount(raw: str) -> str | None:
+    try:
+        v = Decimal(raw)
+        return str(v) if v > 0 else None
+    except InvalidOperation:
+        return None
+
+
+async def _refresh_split_card(message: Message, split: dict) -> None:
+    """Edit the replied-to split card, or post a new one if no reply."""
+    if message.reply_to_message:
+        await message.reply_to_message.edit_text(
+            format_split_card(split),
+            reply_markup=split_keyboard(split),
+        )
+    else:
+        await message.reply(
+            format_split_card(split),
+            reply_markup=split_keyboard(split),
+        )
+
+
+# ------------------------------------------------------------------ #
+# /split                                                                #
+# ------------------------------------------------------------------ #
+
+
+@router.message(Command("split"))
+@inject
+async def split_create_handler(
+    message: Message,
+    command: CommandObject,
+    refinance: FromDishka[RefinanceClient],
+    user_service: FromDishka[UserService],
+) -> None:
+    if message.from_user is None:
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+
+    tokens = (command.args or "").split()
+    # /split <amount> <currency> @recipient [comment...]
+    if len(tokens) < 3 or not tokens[2].startswith("@"):
+        await message.reply(
+            "Usage: <code>/split &lt;amount&gt; &lt;currency&gt; @recipient [comment]</code>"
+        )
+        return
+
+    amount = _parse_amount(tokens[0])
+    if amount is None:
+        await message.reply("Invalid amount.")
+        return
+    currency = tokens[1].upper()
+    if not currency.isalpha():
+        await message.reply("Invalid currency.")
+        return
+    recipient_raw = tokens[2]
+    comment = " ".join(tokens[3:]) or None
+
+    actor_entity = await resolve_self(refinance, message.from_user.id, message.from_user.username)
+    if actor_entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+
+    recipient_entity = await _resolve_target_by_username(refinance, user_service, recipient_raw)
+    if recipient_entity is None:
+        await message.reply(f"Recipient {html.escape(recipient_raw)} not found in refinance.")
+        return
+
+    try:
+        split = await refinance.create_split(
+            actor_entity_id=actor_entity["id"],
+            recipient_entity_id=recipient_entity["id"],
+            amount=amount,
+            currency=currency,
+            comment=comment,
+        )
+    except Exception as exc:
+        await message.reply(f"Failed to create split: {html.escape(str(exc))}")
+        return
+
+    await message.reply(
+        format_split_card(split),
+        reply_markup=split_keyboard(split),
+    )
+
+
+# ------------------------------------------------------------------ #
+# /split_join                                                           #
+# ------------------------------------------------------------------ #
+
+
+@router.message(Command("split_join"))
+@inject
+async def split_join_handler(
+    message: Message,
+    command: CommandObject,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if message.from_user is None:
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+
+    tokens = (command.args or "").split()
+    split_id = parse_split_id(tokens, message)
+    if split_id is None:
+        await message.reply(
+            "Usage: <code>/split_join &lt;id&gt; [amount]</code> or reply to a split card."
+        )
+        return
+
+    amount_tokens = tokens[1:] if tokens and tokens[0].isdigit() else tokens
+    fixed_amount: str | None = None
+    if amount_tokens:
+        fixed_amount = _parse_amount(amount_tokens[0])
+        if fixed_amount is None:
+            await message.reply("Invalid amount.")
+            return
+
+    entity = await resolve_self(refinance, message.from_user.id, message.from_user.username)
+    if entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+
+    try:
+        split = await refinance.upsert_split_participant(
+            actor_entity_id=entity["id"],
+            split_id=split_id,
+            entity_id=entity["id"],
+            fixed_amount=fixed_amount,
+        )
+    except Exception as exc:
+        await message.reply(f"Failed to join split: {html.escape(str(exc))}")
+        return
+
+    await _refresh_split_card(message, split)
+
+
+# ------------------------------------------------------------------ #
+# /split_add                                                            #
+# ------------------------------------------------------------------ #
+
+
+@router.message(Command("split_add"))
+@inject
+async def split_add_handler(
+    message: Message,
+    command: CommandObject,
+    refinance: FromDishka[RefinanceClient],
+    user_service: FromDishka[UserService],
+) -> None:
+    if message.from_user is None:
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+
+    tokens = (command.args or "").split()
+    split_id = parse_split_id(tokens, message)
+    if split_id is None:
+        await message.reply(
+            "Usage: <code>/split_add &lt;id&gt; @user [amount]</code> or reply to a split card."
+        )
+        return
+
+    rest = tokens[1:] if tokens and tokens[0].isdigit() else tokens
+    if not rest or not rest[0].startswith("@"):
+        await message.reply("Usage: <code>/split_add &lt;id&gt; @user [amount]</code>")
+        return
+
+    username_raw = rest[0]
+    fixed_amount: str | None = None
+    if len(rest) >= 2:
+        fixed_amount = _parse_amount(rest[1])
+        if fixed_amount is None:
+            await message.reply("Invalid amount.")
+            return
+
+    actor_entity = await resolve_self(refinance, message.from_user.id, message.from_user.username)
+    if actor_entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+
+    target_entity = await _resolve_target_by_username(refinance, user_service, username_raw)
+    if target_entity is None:
+        await message.reply(f"User {html.escape(username_raw)} not found in refinance.")
+        return
+
+    try:
+        split = await refinance.upsert_split_participant(
+            actor_entity_id=actor_entity["id"],
+            split_id=split_id,
+            entity_id=target_entity["id"],
+            fixed_amount=fixed_amount,
+        )
+    except Exception as exc:
+        await message.reply(f"Failed to add participant: {html.escape(str(exc))}")
+        return
+
+    await _refresh_split_card(message, split)
+
+
+# ------------------------------------------------------------------ #
+# /split_leave                                                          #
+# ------------------------------------------------------------------ #
+
+
+@router.message(Command("split_leave"))
+@inject
+async def split_leave_handler(
+    message: Message,
+    command: CommandObject,
+    refinance: FromDishka[RefinanceClient],
+    user_service: FromDishka[UserService],
+) -> None:
+    if message.from_user is None:
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+
+    tokens = (command.args or "").split()
+    split_id = parse_split_id(tokens, message)
+    if split_id is None:
+        await message.reply(
+            "Usage: <code>/split_leave &lt;id&gt; [@user]</code> or reply to a split card."
+        )
+        return
+
+    rest = tokens[1:] if tokens and tokens[0].isdigit() else tokens
+    target_username = rest[0] if rest and rest[0].startswith("@") else None
+
+    actor_entity = await resolve_self(refinance, message.from_user.id, message.from_user.username)
+    if actor_entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+
+    if target_username:
+        target_entity = await _resolve_target_by_username(refinance, user_service, target_username)
+        if target_entity is None:
+            await message.reply(f"User {html.escape(target_username)} not found in refinance.")
+            return
+        remove_entity_id = target_entity["id"]
+        label = html.escape(target_entity["name"])
+    else:
+        remove_entity_id = actor_entity["id"]
+        label = "You"
+
+    try:
+        split = await refinance.remove_split_participant(
+            actor_entity_id=actor_entity["id"],
+            split_id=split_id,
+            entity_id=remove_entity_id,
+        )
+    except Exception as exc:
+        await message.reply(f"Failed to leave split: {html.escape(str(exc))}")
+        return
+
+    await _refresh_split_card(message, split)
+
+
+# ------------------------------------------------------------------ #
+# /splits                                                               #
+# ------------------------------------------------------------------ #
+
+
+@router.message(Command("splits"))
+@inject
+async def splits_list_handler(
+    message: Message,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if message.from_user is None:
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+
+    entity = await resolve_self(refinance, message.from_user.id, message.from_user.username)
+    if entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+
+    try:
+        splits = await refinance.list_splits(entity["id"], performed=False)
+    except Exception as exc:
+        await message.reply(f"Error: {html.escape(str(exc))}")
+        return
+
+    if not splits:
+        await message.reply("No open splits.")
+        return
+
+    lines = ["<b>Open splits:</b>"]
+    for s in splits:
+        comment = html.escape(s.get("comment") or "Split")
+        recipient = html.escape(s["recipient_entity"]["name"])
+        amount = s["amount"]
+        currency = (s.get("currency") or "").upper()
+        n = len(s.get("participants") or [])
+        lines.append(
+            f"  • #{s['id']} <b>{comment}</b> → {recipient}  "
+            f"{amount} {currency}  ({n} participant{'s' if n != 1 else ''})"
+        )
+
+    await message.reply("\n".join(lines))

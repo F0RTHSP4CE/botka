@@ -244,12 +244,28 @@ class RefinanceClient:
         )
 
     async def delete_transaction(self, actor_entity_id: int, transaction_id: int) -> None:
+        await self._delete(
+            f"/transactions/{transaction_id}",
+            self._entity_headers(actor_entity_id),
+        )
+
+    async def _delete(
+        self,
+        path: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         async with httpx.AsyncClient() as client:
             r = await client.delete(
-                f"{self._api_url}/transactions/{transaction_id}",
-                headers=self._entity_headers(actor_entity_id),
+                f"{self._api_url}{path}",
+                headers=headers,
+                params=params,
             )
             self._raise_for_status(r)
+            try:
+                return r.json()
+            except Exception:
+                return None
 
     # ------------------------------------------------------------------ #
     # Invoices                                                              #
@@ -302,4 +318,109 @@ class RefinanceClient:
         return await self._get(
             f"/deposits/{deposit_id}",
             self._entity_headers(entity_id),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Splits                                                                #
+    # ------------------------------------------------------------------ #
+
+    async def create_split(
+        self,
+        actor_entity_id: int,
+        recipient_entity_id: int,
+        amount: str,
+        currency: str,
+        comment: str | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {
+            "recipient_entity_id": recipient_entity_id,
+            "amount": amount,
+            "currency": currency.lower(),
+        }
+        if comment:
+            body["comment"] = comment
+        return await self._post(
+            "/splits",
+            self._entity_headers(actor_entity_id),
+            body,
+        )
+
+    async def get_split(self, actor_entity_id: int, split_id: int) -> dict:
+        return await self._get(
+            f"/splits/{split_id}",
+            self._entity_headers(actor_entity_id),
+        )
+
+    async def list_splits(
+        self,
+        actor_entity_id: int,
+        performed: bool | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        params: dict[str, Any] = {"limit": limit, "skip": 0}
+        if performed is not None:
+            params["performed"] = performed
+        data = await self._get(
+            "/splits",
+            self._entity_headers(actor_entity_id),
+            params,
+        )
+        return (data or {}).get("items", [])
+
+    async def add_split_participant(
+        self,
+        actor_entity_id: int,
+        split_id: int,
+        entity_id: int,
+        fixed_amount: str | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {"entity_id": entity_id}
+        if fixed_amount is not None:
+            body["fixed_amount"] = fixed_amount
+        return await self._post(
+            f"/splits/{split_id}/participants",
+            self._entity_headers(actor_entity_id),
+            body,
+        )
+
+    async def remove_split_participant(
+        self,
+        actor_entity_id: int,
+        split_id: int,
+        entity_id: int,
+    ) -> dict:
+        return await self._delete(
+            f"/splits/{split_id}/participants",
+            self._entity_headers(actor_entity_id),
+            {"entity_id": entity_id},
+        )
+
+    async def upsert_split_participant(
+        self,
+        actor_entity_id: int,
+        split_id: int,
+        entity_id: int,
+        fixed_amount: str | None = None,
+    ) -> dict:
+        """Add or update a participant. Removes first if already present."""
+        try:
+            await self.remove_split_participant(actor_entity_id, split_id, entity_id)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in (404, 418):
+                raise
+        return await self.add_split_participant(
+            actor_entity_id, split_id, entity_id, fixed_amount
+        )
+
+    async def perform_split(self, actor_entity_id: int, split_id: int) -> dict:
+        return await self._post(
+            f"/splits/{split_id}/perform",
+            self._entity_headers(actor_entity_id),
+            {},
+        )
+
+    async def delete_split(self, actor_entity_id: int, split_id: int) -> None:
+        await self._delete(
+            f"/splits/{split_id}",
+            self._entity_headers(actor_entity_id),
         )
