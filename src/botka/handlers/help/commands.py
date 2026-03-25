@@ -53,7 +53,12 @@ HELP_TEXT = (
     "/request [@username | reply] &lt;amount&gt; &lt;currency&gt; [comment] — request money from someone (they confirm or deny).\n"
     "/balance [@username] — show balance and recent activity (yours or another person's).\n"
     "/deposit &lt;amount&gt; &lt;currency&gt; — top up your balance with a card.\n"
-    "/transactions — show your last 10 transactions."
+    "/transactions — show your last 10 transactions.\n"
+    "/split &lt;amount&gt; &lt;currency&gt; @recipient [comment] — create a split campaign.\n"
+    "/split_join [id] [amount] — join a split (reply to card or provide id).\n"
+    "/split_add [id] @user [amount] — add someone to a split.\n"
+    "/split_leave [id] [@user] — leave a split (or creator removes @user).\n"
+    "/splits — list your open splits."
 )
 
 

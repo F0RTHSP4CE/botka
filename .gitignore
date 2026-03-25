@@ -60,3 +60,7 @@ Thumbs.db
 # Project-specific
 __pypackages__/
 .env
+
+# AISlop
+.claude
+CLAUDE.md

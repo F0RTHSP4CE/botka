@@ -16,6 +16,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
+from botka.handlers.refinance.shared import format_split_card, resolve_self, split_keyboard
 from botka.services.refinance_client import RefinanceClient
 
 router = Router(name=__name__)
@@ -302,3 +303,175 @@ async def deposit_check_callback(
         await callback.answer(f"Deposit {status}.")
     else:
         await callback.answer("Not paid yet.")
+
+
+# ------------------------------------------------------------------ #
+# Split helpers                                                         #
+# ------------------------------------------------------------------ #
+
+
+async def _refresh_split_card(
+    callback: CallbackQuery, refinance: RefinanceClient, split: dict
+) -> None:
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            format_split_card(split),
+            reply_markup=split_keyboard(split),
+        )
+
+
+# ------------------------------------------------------------------ #
+# Split: join                                                           #
+# ------------------------------------------------------------------ #
+
+
+@router.callback_query(F.data.startswith("rf_split:join:"))
+@inject
+async def split_join_callback(
+    callback: CallbackQuery,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if callback.from_user is None:
+        await callback.answer("Cannot determine user.", show_alert=True)
+        return
+
+    split_id = int((callback.data or "").split(":")[2])
+
+    entity = await resolve_self(refinance, callback.from_user.id, callback.from_user.username)
+    if entity is None:
+        await callback.answer(
+            "Your account is not linked to a refinance entity.", show_alert=True
+        )
+        return
+
+    try:
+        split = await refinance.upsert_split_participant(
+            actor_entity_id=entity["id"],
+            split_id=split_id,
+            entity_id=entity["id"],
+        )
+    except Exception as exc:
+        await callback.answer(f"Failed: {str(exc)[:100]}", show_alert=True)
+        return
+
+    await _refresh_split_card(callback, refinance, split)
+    await callback.answer("Joined!")
+
+
+# ------------------------------------------------------------------ #
+# Split: leave                                                          #
+# ------------------------------------------------------------------ #
+
+
+@router.callback_query(F.data.startswith("rf_split:leave:"))
+@inject
+async def split_leave_callback(
+    callback: CallbackQuery,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if callback.from_user is None:
+        await callback.answer("Cannot determine user.", show_alert=True)
+        return
+
+    split_id = int((callback.data or "").split(":")[2])
+
+    entity = await resolve_self(refinance, callback.from_user.id, callback.from_user.username)
+    if entity is None:
+        await callback.answer(
+            "Your account is not linked to a refinance entity.", show_alert=True
+        )
+        return
+
+    try:
+        split = await refinance.remove_split_participant(
+            actor_entity_id=entity["id"],
+            split_id=split_id,
+            entity_id=entity["id"],
+        )
+    except Exception as exc:
+        await callback.answer(f"Failed: {str(exc)[:100]}", show_alert=True)
+        return
+
+    await _refresh_split_card(callback, refinance, split)
+    await callback.answer("Left split.")
+
+
+# ------------------------------------------------------------------ #
+# Split: perform                                                        #
+# ------------------------------------------------------------------ #
+
+
+@router.callback_query(F.data.startswith("rf_split:perform:"))
+@inject
+async def split_perform_callback(
+    callback: CallbackQuery,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if callback.from_user is None:
+        await callback.answer("Cannot determine user.", show_alert=True)
+        return
+
+    split_id = int((callback.data or "").split(":")[2])
+
+    entity = await resolve_self(refinance, callback.from_user.id, callback.from_user.username)
+    if entity is None:
+        await callback.answer(
+            "Your account is not linked to a refinance entity.", show_alert=True
+        )
+        return
+
+    try:
+        split = await refinance.perform_split(
+            actor_entity_id=entity["id"],
+            split_id=split_id,
+        )
+    except Exception as exc:
+        await callback.answer(f"Failed: {str(exc)[:100]}", show_alert=True)
+        return
+
+    await _refresh_split_card(callback, refinance, split)
+    txs = len(split.get("performed_transactions") or [])
+    await callback.answer(f"✅ Split performed — {txs} transaction(s) created.")
+
+
+# ------------------------------------------------------------------ #
+# Split: cancel                                                         #
+# ------------------------------------------------------------------ #
+
+
+@router.callback_query(F.data.startswith("rf_split:cancel:"))
+@inject
+async def split_cancel_callback(
+    callback: CallbackQuery,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if callback.from_user is None:
+        await callback.answer("Cannot determine user.", show_alert=True)
+        return
+
+    parts = (callback.data or "").split(":")
+    split_id = int(parts[2])
+    actor_tid = int(parts[3]) if len(parts) > 3 else 0
+
+    if actor_tid and callback.from_user.id != actor_tid:
+        await callback.answer("Only the split creator can cancel it.", show_alert=True)
+        return
+
+    entity = await resolve_self(refinance, callback.from_user.id, callback.from_user.username)
+    if entity is None:
+        await callback.answer(
+            "Your account is not linked to a refinance entity.", show_alert=True
+        )
+        return
+
+    try:
+        await refinance.delete_split(actor_entity_id=entity["id"], split_id=split_id)
+    except Exception as exc:
+        await callback.answer(f"Failed: {str(exc)[:100]}", show_alert=True)
+        return
+
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"❌ Split #{split_id} cancelled.", reply_markup=None
+        )
+    await callback.answer("Cancelled.")
