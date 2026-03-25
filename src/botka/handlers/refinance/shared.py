@@ -27,11 +27,7 @@ def parse_split_id(args: list[str], message: Message) -> int | None:
     if args and args[0].isdigit():
         return int(args[0])
     if message.reply_to_message:
-        text = (
-            message.reply_to_message.text
-            or message.reply_to_message.caption
-            or ""
-        )
+        text = message.reply_to_message.text or message.reply_to_message.caption or ""
         m = re.search(r"\(#(\d+)\)", text)
         if m:
             return int(m.group(1))
@@ -45,35 +41,42 @@ def format_split_card(split: dict) -> str:
     currency = (split.get("currency") or "").upper()
     total = Decimal(str(split["amount"]))
     collected = Decimal(str(split.get("collected_amount") or 0))
-    remaining = total - collected
     participants = split.get("participants") or []
     share_preview = split.get("share_preview") or {}
     current_share = share_preview.get("current_share")
-    next_share = share_preview.get("next_share")
     performed = split.get("performed", False)
 
-    lines = [f"💸 <b>{html.escape(comment)}</b>  (#{split_id})"]
-    lines.append(
-        f"Recipient: <b>{recipient_name}</b>  •  {total} {currency}"
+    bar_width = 16
+    filled = round(float(collected / total) * bar_width) if total > 0 else 0
+    bar = "█" * filled + "░" * (bar_width - filled)
+
+    n = len(participants)
+    share_str = (
+        f" · {current_share} {currency} each" if current_share is not None else ""
+    )
+    participant_summary = (
+        f"{n} participant{'s' if n != 1 else ''}{share_str}"
+        if n
+        else "no participants yet"
     )
 
-    if participants:
-        lines.append(f"\nParticipants ({len(participants)}):")
-        for p in participants:
-            name = html.escape(p["entity"]["name"])
-            fa = p.get("fixed_amount")
-            if fa is not None:
-                lines.append(f"  • {name} — {fa} {currency} (fixed)")
-            else:
-                share_str = str(current_share) if current_share is not None else "auto"
-                lines.append(f"  • {name} — {share_str} {currency} (auto)")
-    else:
-        lines.append("\nParticipants: none yet")
+    name_parts = []
+    for p in participants:
+        name = html.escape(p["entity"]["name"])
+        fa = p.get("fixed_amount")
+        name_parts.append(f"{name} (fixed {fa})" if fa is not None else name)
 
-    lines.append(
-        f"\nCollected: {collected} {currency}  •  Remaining: {remaining} {currency}"
-    )
-
+    lines = [
+        f"💸 <b>{html.escape(comment)}</b>  #{split_id}",
+        f"→ {recipient_name}",
+        "",
+        f"<b>{collected}</b> / {total} {currency}",
+        f"<code>{bar}</code>",
+        "",
+        f"{participant_summary}",
+    ]
+    if name_parts:
+        lines.append(" · ".join(name_parts))
     if performed:
         txs = split.get("performed_transactions") or []
         lines.append(f"\n✅ Performed — {len(txs)} transaction(s) created.")
@@ -88,7 +91,7 @@ def split_keyboard(split: dict) -> InlineKeyboardMarkup:
     next_share = share_preview.get("next_share", "?")
     performed = split.get("performed", False)
 
-    actor_auth = (split["actor_entity"].get("auth") or {})
+    actor_auth = split["actor_entity"].get("auth") or {}
     actor_tid = actor_auth.get("telegram_id") or 0
 
     if performed:
