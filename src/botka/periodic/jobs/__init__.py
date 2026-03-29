@@ -2,6 +2,7 @@ from .base import PeriodicContext, PeriodicJob
 from .good_morning import send_good_morning
 from .heartbeat import send_heartbeat
 from .polls import poll_maintenance
+from .ups import ups_discharge_report
 
 __all__ = [
     "PeriodicContext",
@@ -9,4 +10,5 @@ __all__ = [
     "send_good_morning",
     "send_heartbeat",
     "poll_maintenance",
+    "ups_discharge_report",
 ]

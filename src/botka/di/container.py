@@ -17,8 +17,12 @@ from botka.services.planka_client import PlankaClient
 from botka.services.planka_command_service import PlankaCommandService
 from botka.services.planka_mappings_service import PlankaCardMappingService
 from botka.services.polls_service import PollsService
-from botka.services.shopping_list_service import ShoppingListService, ShoppingBuyConfirmationTracker
+from botka.services.shopping_list_service import (
+    ShoppingListService,
+    ShoppingBuyConfirmationTracker,
+)
 from botka.services.refinance_client import RefinanceClient
+from botka.services.ups_client import UpsClient
 from botka.services.user_service import UserService
 from botka.services.usbutler_service import UsbutlerService
 
@@ -89,6 +93,10 @@ class AppProvider(Provider):
         return UsbutlerService(settings)
 
     @provide(scope=Scope.APP)
+    def ups_client(self, settings: Settings) -> UpsClient:
+        return UpsClient(settings)
+
+    @provide(scope=Scope.APP)
     async def planka_client(self, settings: Settings) -> AsyncIterable[PlankaClient]:
         client = PlankaClient(
             base_url=settings.planka_base_url or "",
@@ -108,7 +116,9 @@ class AppProvider(Provider):
             await client.close()
 
     @provide(scope=Scope.APP)
-    async def refinance_client(self, settings: Settings) -> AsyncIterable[RefinanceClient]:
+    async def refinance_client(
+        self, settings: Settings
+    ) -> AsyncIterable[RefinanceClient]:
         client = RefinanceClient(settings)
         if client.is_configured:
             await client.verify_bot_entity()
@@ -119,11 +129,15 @@ class AppProvider(Provider):
         return PlankaAlbumTracker()
 
     @provide(scope=Scope.REQUEST)
-    def planka_mappings_service(self, session: AsyncSession) -> PlankaCardMappingService:
+    def planka_mappings_service(
+        self, session: AsyncSession
+    ) -> PlankaCardMappingService:
         return PlankaCardMappingService(session)
 
     @provide(scope=Scope.REQUEST)
-    def planka_attachment_cache_service(self, session: AsyncSession) -> PlankaAttachmentCacheService:
+    def planka_attachment_cache_service(
+        self, session: AsyncSession
+    ) -> PlankaAttachmentCacheService:
         return PlankaAttachmentCacheService(session)
 
     @provide(scope=Scope.REQUEST)

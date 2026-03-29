@@ -23,6 +23,7 @@ from botka.handlers import (
     planka,
     refinance,
     shopping,
+    ups,
     users,
 )
 from botka.handlers.pins.messages import NewTopicForwardMiddleware
@@ -62,9 +63,7 @@ async def _run() -> None:
             shopping.messages.router.message.filter(
                 F.chat.id == settings.shopping_chat_id
             )
-    pins.messages.router.message.filter(
-        F.chat.id.in_(settings.pins_tracked_chat_ids)
-    )
+    pins.messages.router.message.filter(F.chat.id.in_(settings.pins_tracked_chat_ids))
 
     container = build_container(settings)
 
@@ -90,6 +89,7 @@ async def _run() -> None:
     dp.include_router(shopping.callbacks.router)
     dp.include_router(borrowed.messages.router)
     dp.include_router(planka.commands.router)
+    dp.include_router(ups.commands.router)
     dp.include_router(doors.callbacks.router)
     dp.include_router(borrowed.callbacks.router)
     dp.include_router(pins.messages.router)

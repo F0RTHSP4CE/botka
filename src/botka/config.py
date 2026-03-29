@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     mikrotik_timeout_seconds: float = 5.0
     mikrotik_verify_tls: bool = False
 
+    # UPS (acidmaid) integration
+    ups_base_url: str | None = "http://acidmaid.local"
+    ups_timeout_seconds: float = 5.0
+    ups_report_chat_id: int | None = None
+    ups_report_topic_id: int | None = None
+    ups_check_interval_seconds: float = 30.0
+    ups_report_interval_seconds: float = 600.0
+
     # Refinance integration
     refinance_api_url: str | None = None
     refinance_secret_key: str | None = None
@@ -154,6 +162,8 @@ class Settings(BaseSettings):
         "pins_chat_id",
         "mac_tracker_notify_chat_id",
         "mac_tracker_notify_topic_id",
+        "ups_report_chat_id",
+        "ups_report_topic_id",
         "decisions_chat_id",
         "decisions_topic_id",
         "heartbeat_chat_id",

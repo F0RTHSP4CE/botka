@@ -8,5 +8,6 @@ __all__ = [
     "planka",
     "refinance",
     "shopping",
+    "ups",
     "users",
 ]

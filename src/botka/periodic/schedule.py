@@ -8,6 +8,7 @@ from botka.periodic.jobs import (
     poll_maintenance,
     send_good_morning,
     send_heartbeat,
+    ups_discharge_report,
 )
 
 
@@ -39,6 +40,15 @@ def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
             cron_minute=00,
         )
     )
+    ups_interval = settings.ups_check_interval_seconds
+    if ups_interval > 0 and settings.ups_base_url:
+        jobs.append(
+            PeriodicJob(
+                name="ups_discharge_report",
+                handler=ups_discharge_report,
+                interval_seconds=ups_interval,
+            )
+        )
     return jobs
 
 
