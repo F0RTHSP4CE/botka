@@ -21,6 +21,7 @@ from botka.services.shopping_list_service import (
     ShoppingListService,
     ShoppingBuyConfirmationTracker,
 )
+from botka.services.fridge_client import FridgeClient
 from botka.services.refinance_client import RefinanceClient
 from botka.services.ups_client import UpsClient
 from botka.services.user_service import UserService
@@ -114,6 +115,10 @@ class AppProvider(Provider):
         yield client
         if client.is_configured:
             await client.close()
+
+    @provide(scope=Scope.APP)
+    def fridge_client(self, settings: Settings) -> FridgeClient:
+        return FridgeClient(settings)
 
     @provide(scope=Scope.APP)
     async def refinance_client(

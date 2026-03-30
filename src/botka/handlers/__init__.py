@@ -1,6 +1,7 @@
 __all__ = [
     "borrowed",
     "doors",
+    "fridge",
     "help",
     "mac_tracker",
     "periodic",

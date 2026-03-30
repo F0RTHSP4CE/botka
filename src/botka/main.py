@@ -16,6 +16,7 @@ from botka.di.container import build_container
 from botka.handlers import (
     borrowed,
     doors,
+    fridge,
     help,
     mac_tracker,
     periodic,
@@ -80,6 +81,7 @@ async def _run() -> None:
     dp.include_router(refinance.commands.router)
     dp.include_router(refinance.callbacks.router)
     dp.include_router(doors.commands.router)
+    dp.include_router(fridge.commands.router)
     dp.include_router(mac_tracker.commands.router)
     dp.include_router(mac_tracker.callbacks.router)
     dp.include_router(borrowed.commands.router)
@@ -91,6 +93,7 @@ async def _run() -> None:
     dp.include_router(planka.commands.router)
     dp.include_router(ups.commands.router)
     dp.include_router(doors.callbacks.router)
+    dp.include_router(fridge.callbacks.router)
     dp.include_router(borrowed.callbacks.router)
     dp.include_router(pins.messages.router)
     dp.include_router(poll_messages.router)

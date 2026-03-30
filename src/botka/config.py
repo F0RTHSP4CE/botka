@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     ups_check_interval_seconds: float = 30.0
     ups_report_interval_seconds: float = 600.0
 
+    # Fridge POS integration
+    fridge_pos_url: str | None = None
+    fridge_pos_secret: str | None = None
+
     # Refinance integration
     refinance_api_url: str | None = None
     refinance_secret_key: str | None = None
