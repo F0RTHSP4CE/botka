@@ -45,8 +45,7 @@ HELP_TEXT = (
     "/periodic_run &lt;job_name&gt; — run a periodic job now (residents only).\n"
     "  Example: /periodic_run poll_maintenance — refresh poll timers and auto-close due polls.\n"
     "\n"
-    "UPS:
-"
+    "UPS:\n"
     "/ups — show current UPS / battery status (residents/members).\n"
     "\n"
     "Fridge:\n"
