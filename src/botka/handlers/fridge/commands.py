@@ -10,6 +10,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
+from botka.db.models import User, UserTier
 from botka.services.fridge_client import FridgeClient
 
 router = Router(name=__name__)
@@ -35,9 +36,14 @@ def _build_confirm_keyboard(user_id: int) -> InlineKeyboardMarkup:
 async def fridge_handler(
     message: Message,
     fridge: FromDishka[FridgeClient],
+    user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
+        return
+    tier = user_record.tier if user_record else UserTier.guest
+    if tier not in (UserTier.resident, UserTier.member):
+        await message.reply("Only residents and members can use the fridge.")
         return
     if not fridge.is_configured:
         await message.reply(_NOT_CONFIGURED)
