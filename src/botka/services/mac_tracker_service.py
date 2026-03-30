@@ -371,23 +371,55 @@ async def mac_tracker_poll_loop(
     settings: Settings,
 ) -> None:
     previous_present_ids: set[int] = set()
+    # Tracks when each user was first seen absent, for leave debouncing.
+    absent_since: dict[int, float] = {}
+    grace = settings.mac_tracker_leave_grace_seconds
     while True:
         try:
             async with sessionmaker() as session:
                 mikrotik = MikrotikDhcpClient(settings)
                 service = MacTrackerService(session, settings, mikrotik)
-                before = set(previous_present_ids)
-                after = await service.sync_presence()
-                previous_present_ids = set(after)
-                user_service = UserService(session, settings)
-                user_map = await _load_user_map(user_service, before | after)
-                await _notify_presence_changes(
-                    bot,
-                    settings,
-                    before=before,
-                    after=after,
-                    user_map=user_map,
+                raw_present = await service.sync_presence()
+
+                now = datetime.now(timezone.utc).timestamp()
+
+                # Users who just appeared — cancel any pending departure.
+                for uid in raw_present:
+                    absent_since.pop(uid, None)
+
+                # Users who disappeared — start or continue grace timer.
+                newly_absent = previous_present_ids - raw_present
+                for uid in newly_absent:
+                    absent_since.setdefault(uid, now)
+
+                # Only report a user as "left" once the grace period elapses.
+                confirmed_left: set[int] = set()
+                for uid, since in list(absent_since.items()):
+                    if now - since >= grace:
+                        confirmed_left.add(uid)
+                        del absent_since[uid]
+
+                # Effective presence: raw present + still within grace period.
+                effective_present = raw_present | (
+                    previous_present_ids - confirmed_left
                 )
+
+                entered_ids = effective_present - previous_present_ids
+                left_ids = confirmed_left
+
+                if entered_ids or left_ids:
+                    all_ids = entered_ids | left_ids
+                    user_service = UserService(session, settings)
+                    user_map = await _load_user_map(user_service, all_ids)
+                    await _notify_presence_changes(
+                        bot,
+                        settings,
+                        before=previous_present_ids,
+                        after=effective_present,
+                        user_map=user_map,
+                    )
+
+                previous_present_ids = effective_present
         finally:
             await _sleep(settings.mac_tracker_poll_seconds)
 
