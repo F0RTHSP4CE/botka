@@ -16,6 +16,7 @@ _SENSOR_NAMES = [
     "Battery ETA",
     "Battery SOC Rate",
     "Battery Voltage",
+    "Battery Voltage Rate",
 ]
 
 _TEXT_SENSOR_NAMES = [
@@ -31,6 +32,7 @@ class UpsStatus:
     battery_soc_rate: float | None  # %/h
     battery_state: str | None  # e.g. "discharging", "charging", "idle"
     battery_voltage: float | None  # V
+    battery_voltage_rate: float | None  # V/h
 
     @property
     def is_discharging(self) -> bool:
@@ -53,6 +55,8 @@ class UpsStatus:
             lines.append(f"Battery ETA: {self.battery_eta:.0f} min")
         if self.battery_soc_rate is not None:
             lines.append(f"SOC Rate: {self.battery_soc_rate:.1f}% / h")
+        if self.battery_voltage_rate is not None:
+            lines.append(f"Voltage Rate: {self.battery_voltage_rate:.2f} V/h")
         return "\n".join(lines)
 
 
@@ -85,6 +89,7 @@ class UpsClient:
             battery_soc_rate=sensors.get("Battery SOC Rate"),
             battery_state=text_sensors.get("Battery State"),
             battery_voltage=sensors.get("Battery Voltage"),
+            battery_voltage_rate=sensors.get("Battery Voltage Rate"),
         )
 
     async def _read_sensor(self, client: httpx.AsyncClient, name: str) -> float | None:
