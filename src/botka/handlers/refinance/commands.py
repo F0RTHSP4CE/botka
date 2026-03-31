@@ -100,7 +100,9 @@ async def _resolve_target_by_telegram_id(
         return None
 
 
-def _split_args(message: Message, command: CommandObject) -> tuple[str | None, list[str]]:
+def _split_args(
+    message: Message, command: CommandObject
+) -> tuple[str | None, list[str]]:
     """Return (raw_username_or_None, remaining_tokens).
 
     If the first token starts with '@' it is treated as the target username.
@@ -114,11 +116,7 @@ def _split_args(message: Message, command: CommandObject) -> tuple[str | None, l
 
 
 def _format_balance_dict(bal: dict) -> str:
-    parts = [
-        f"{v} {k.upper()}"
-        for k, v in bal.items()
-        if Decimal(str(v)) != 0
-    ]
+    parts = [f"{v} {k.upper()}" for k, v in bal.items() if Decimal(str(v)) != 0]
     return ", ".join(parts) if parts else "0"
 
 
@@ -160,9 +158,7 @@ async def transfer_handler(
 
     parsed = _parse_amount_currency(rest)
     if parsed is None or len(rest) < 2:
-        await message.reply(
-            "Usage: <code>/transfer @username 100 GEL [comment]</code>"
-        )
+        await message.reply("Usage: <code>/transfer @username 100 GEL [comment]</code>")
         return
     amount, currency = parsed
     comment = " ".join(rest[2:]) or None
@@ -188,9 +184,7 @@ async def transfer_handler(
         await message.reply(_NOT_LINKED)
         return
     if target_entity is None:
-        await message.reply(
-            f"User {html.escape(target_label)} not found in refinance."
-        )
+        await message.reply(f"User {html.escape(target_label)} not found in refinance.")
         return
 
     actor_entity_id = actor_entity["id"]
@@ -280,9 +274,7 @@ async def request_handler(
 
     parsed = _parse_amount_currency(rest)
     if parsed is None or len(rest) < 2:
-        await message.reply(
-            "Usage: <code>/request @username 50 GEL [comment]</code>"
-        )
+        await message.reply("Usage: <code>/request @username 50 GEL [comment]</code>")
         return
     amount, currency = parsed
     comment = " ".join(rest[2:]) or None
@@ -308,9 +300,7 @@ async def request_handler(
         await message.reply(_NOT_LINKED)
         return
     if payer_entity is None:
-        await message.reply(
-            f"User {html.escape(payer_label)} not found in refinance."
-        )
+        await message.reply(f"User {html.escape(payer_label)} not found in refinance.")
         return
 
     # Create a draft transaction: payer → requester (status=draft)
@@ -348,7 +338,11 @@ async def request_handler(
     payer_tid_field = payer_telegram_id or 0
 
     # @mention so the payer gets a Telegram notification
-    payer_mention = payer_label if payer_label.startswith("@") else html.escape(payer_entity["name"])
+    payer_mention = (
+        payer_label
+        if payer_label.startswith("@")
+        else html.escape(payer_entity["name"])
+    )
 
     body = (
         f"{payer_mention} \u2014 <b>{html.escape(actor_entity['name'])}</b> requests "
@@ -408,9 +402,7 @@ async def balance_handler(
     if args and args[0].startswith("@"):
         entity = await _resolve_target_by_username(refinance, user_service, args[0])
         if entity is None:
-            await message.reply(
-                f"User {html.escape(args[0])} not found in refinance."
-            )
+            await message.reply(f"User {html.escape(args[0])} not found in refinance.")
             return
         viewing_other = True
     else:
@@ -453,18 +445,13 @@ async def balance_handler(
                 by_currency[cur] = by_currency.get(cur, Decimal(0)) + Decimal(
                     str(amt["amount"])
                 )
-        inv_sum = ", ".join(f"{v} {k}" for k, v in by_currency.items())
-        lines.append(
-            f"🧾 <b>Unpaid invoices ({len(pending_invoices)}):</b> {inv_sum}"
-        )
+        inv_sum = " or ".join(f"{v} {k}" for k, v in by_currency.items())
+        lines.append(f"🧾 <b>Unpaid invoices ({len(pending_invoices)}):</b> {inv_sum}")
         for inv in pending_invoices[:5]:
-            from_name = html.escape(
-                (inv.get("from_entity") or {}).get("name", "?")
-            )
+            from_name = html.escape((inv.get("from_entity") or {}).get("name", "?"))
             to_name = html.escape((inv.get("to_entity") or {}).get("name", "?"))
-            amounts_str = ", ".join(
-                f"{a['amount']} {a['currency'].upper()}"
-                for a in inv.get("amounts", [])
+            amounts_str = " or ".join(
+                f"{a['amount']} {a['currency'].upper()}" for a in inv.get("amounts", [])
             )
             lines.append(f"  · #{inv['id']} {from_name} → {to_name}: {amounts_str}")
         if len(pending_invoices) > 5:
@@ -543,18 +530,22 @@ async def deposit_handler(
     if deposit_id is not None:
         rows = []
         if payment_url:
-            rows.append([
-                InlineKeyboardButton(
-                    text=f"💳 Pay {html.escape(amount)} {html.escape(currency)} via Keepz",
-                    url=payment_url,
-                )
-            ])
-        rows.append([
-            InlineKeyboardButton(
-                text="🔄 Check payment",
-                callback_data=f"rf_dep:check:{deposit_id}:{entity['id']}:{message.from_user.id}",
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"💳 Pay {html.escape(amount)} {html.escape(currency)} via Keepz",
+                        url=payment_url,
+                    )
+                ]
             )
-        ])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔄 Check payment",
+                    callback_data=f"rf_dep:check:{deposit_id}:{entity['id']}:{message.from_user.id}",
+                )
+            ]
+        )
         check_kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
     if message.chat.type != "private":
@@ -567,7 +558,9 @@ async def deposit_handler(
             )
             await message.reply("💳 Deposit link sent to your private messages.")
         except Exception:
-            await message.reply(text, disable_web_page_preview=False, reply_markup=check_kb)
+            await message.reply(
+                text, disable_web_page_preview=False, reply_markup=check_kb
+            )
     else:
         await message.reply(text, disable_web_page_preview=False, reply_markup=check_kb)
 
