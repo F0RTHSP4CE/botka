@@ -27,6 +27,7 @@ from botka.handlers import (
     ups,
     users,
 )
+from botka.handlers.help.commands import get_bot_commands
 from botka.handlers.pins.messages import NewTopicForwardMiddleware
 from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import commands as poll_commands
@@ -119,6 +120,7 @@ async def _run() -> None:
         run_planka_poller(bot, planka_client, settings)
     )
     await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_my_commands(get_bot_commands())
     try:
         await dp.start_polling(bot)
     finally:
