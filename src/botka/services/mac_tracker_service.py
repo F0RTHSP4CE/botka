@@ -370,7 +370,14 @@ async def mac_tracker_poll_loop(
     sessionmaker,
     settings: Settings,
 ) -> None:
-    previous_present_ids: set[int] = set()
+    # Seed with current presence so we don't spam "joined" on (re)start.
+    try:
+        async with sessionmaker() as session:
+            mikrotik = MikrotikDhcpClient(settings)
+            service = MacTrackerService(session, settings, mikrotik)
+            previous_present_ids = await service.sync_presence()
+    except Exception:
+        previous_present_ids = set()
     # Tracks when each user was first seen absent, for leave debouncing.
     absent_since: dict[int, float] = {}
     grace = settings.mac_tracker_leave_grace_seconds
