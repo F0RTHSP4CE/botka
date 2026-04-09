@@ -1,5 +1,9 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
+RUN apt update && apt install -y --no-install-recommends \
+	sqlite3 \
+	&& rm -rf /var/lib/apt/lists/*
+
 # Enable BuildKit cache mounts for uv
 # syntax=docker/dockerfile:1.7-labs
 
