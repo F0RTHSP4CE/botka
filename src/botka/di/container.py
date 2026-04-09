@@ -22,6 +22,7 @@ from botka.services.shopping_list_service import (
     ShoppingBuyConfirmationTracker,
 )
 from botka.services.fridge_client import FridgeClient
+from botka.services.meeting_service import MeetingService
 from botka.services.refinance_client import RefinanceClient
 from botka.services.ups_client import UpsClient
 from botka.services.user_service import UserService
@@ -71,6 +72,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def polls_service(self, session: AsyncSession) -> PollsService:
         return PollsService(session)
+
+    @provide(scope=Scope.REQUEST)
+    def meeting_service(self, session: AsyncSession) -> MeetingService:
+        return MeetingService(session)
 
     @provide(scope=Scope.APP)
     def mikrotik_client(self, settings: Settings) -> MikrotikDhcpClient:

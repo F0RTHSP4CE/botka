@@ -72,6 +72,11 @@ COMMANDS: list[CommandInfo] = [
     CommandInfo("periodic_run", "run a periodic job now (residents only)", "Periodic"),
     CommandInfo("ups", "show current UPS / battery status (residents/members)", "UPS"),
     CommandInfo(
+        "agenda",
+        "add a topic to the weekly meeting agenda (residents/members)",
+        "Meeting",
+    ),
+    CommandInfo(
         "fridge",
         "open the fridge and charge your account (residents/members)",
         "Fridge",

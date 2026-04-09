@@ -8,6 +8,7 @@ from botka.periodic.jobs import (
     poll_maintenance,
     send_good_morning,
     send_heartbeat,
+    send_meeting_agenda,
     ups_discharge_report,
 )
 
@@ -40,6 +41,16 @@ def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
             cron_minute=00,
         )
     )
+    if settings.meeting_chat_id is not None:
+        jobs.append(
+            PeriodicJob(
+                name="meeting_agenda",
+                handler=send_meeting_agenda,
+                cron_hour=18,
+                cron_minute=0,
+                cron_day_of_week="tue",
+            )
+        )
     ups_interval = settings.ups_check_interval_seconds
     if ups_interval > 0 and settings.ups_base_url:
         jobs.append(

@@ -19,6 +19,7 @@ from botka.handlers import (
     fridge,
     help,
     mac_tracker,
+    meeting,
     periodic,
     pins,
     planka,
@@ -87,6 +88,7 @@ async def _run() -> None:
     dp.include_router(mac_tracker.callbacks.router)
     dp.include_router(borrowed.commands.router)
     dp.include_router(shopping.commands.router)
+    dp.include_router(meeting.commands.router)
     dp.include_router(poll_commands.router)
     dp.include_router(shopping.messages.router)
     dp.include_router(shopping.callbacks.router)
@@ -108,6 +110,7 @@ async def _run() -> None:
     dp.message.middleware(MediaGroupCollectorMiddleware())
     dp.message.middleware(user_sync)
     dp.message.middleware(NewTopicForwardMiddleware(settings))
+    dp.edited_message.middleware(user_sync)
     dp.callback_query.middleware(user_sync)
     dp.poll_answer.middleware(user_sync)
     mac_poll_task = asyncio.create_task(

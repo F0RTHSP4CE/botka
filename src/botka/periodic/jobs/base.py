@@ -23,3 +23,4 @@ class PeriodicJob:
     interval_seconds: int | None = None
     cron_hour: int | None = None
     cron_minute: int | None = None
+    cron_day_of_week: str | None = None

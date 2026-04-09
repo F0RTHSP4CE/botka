@@ -53,14 +53,16 @@ class Settings(BaseSettings):
     mac_tracker_notify_topic_id: int | None = None
     decisions_chat_id: int | None = None
     decisions_topic_id: int | None = None
+    meeting_chat_id: int | None = None
+    meeting_topic_id: int | None = None
     heartbeat_chat_id: int | None = None
     heartbeat_topic_id: int | None = None
     good_morning_chat_id: int | None = None
     good_morning_topic_id: int | None = None
     good_morning_city: str | None = None
     good_morning_photo_urls: list[str] | str = Field(default_factory=list)
-    periodic_heartbeat_seconds: float = 3600.0
-    polls_maintenance_interval_seconds: float = 3600.0
+    periodic_heartbeat_seconds: int = 3600
+    polls_maintenance_interval_seconds: int = 3600
     polls_default_close_hours: int = 168
     timezone: str | None = None
     mikrotik_base_url: str | None = None
@@ -74,8 +76,8 @@ class Settings(BaseSettings):
     ups_timeout_seconds: float = 5.0
     ups_report_chat_id: int | None = None
     ups_report_topic_id: int | None = None
-    ups_check_interval_seconds: float = 30.0
-    ups_report_interval_seconds: float = 600.0
+    ups_check_interval_seconds: int = 30
+    ups_report_interval_seconds: int = 600
 
     # Fridge POS integration
     fridge_pos_url: str | None = None
@@ -171,6 +173,8 @@ class Settings(BaseSettings):
         "ups_report_topic_id",
         "decisions_chat_id",
         "decisions_topic_id",
+        "meeting_chat_id",
+        "meeting_topic_id",
         "heartbeat_chat_id",
         "heartbeat_topic_id",
         "good_morning_chat_id",

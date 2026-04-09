@@ -4,6 +4,7 @@ __all__ = [
     "fridge",
     "help",
     "mac_tracker",
+    "meeting",
     "periodic",
     "pins",
     "planka",

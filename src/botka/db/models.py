@@ -198,3 +198,18 @@ class PlankaAttachmentTelegramCache(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+
+class AgendaTopic(Base):
+    __tablename__ = "agenda_topics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    bot_reply_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notify_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    cancelled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

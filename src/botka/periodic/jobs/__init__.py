@@ -1,6 +1,7 @@
 from .base import PeriodicContext, PeriodicJob
 from .good_morning import send_good_morning
 from .heartbeat import send_heartbeat
+from .meeting import send_meeting_agenda
 from .polls import poll_maintenance
 from .ups import ups_discharge_report
 
@@ -9,6 +10,7 @@ __all__ = [
     "PeriodicJob",
     "send_good_morning",
     "send_heartbeat",
+    "send_meeting_agenda",
     "poll_maintenance",
     "ups_discharge_report",
 ]
