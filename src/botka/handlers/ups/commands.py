@@ -34,4 +34,7 @@ async def ups_status_handler(
         logger.exception("Failed to fetch UPS status")
         await message.reply("Failed to fetch UPS status.")
         return
+    if status is None:
+        await message.reply("UPS device is unreachable.")
+        return
     await message.reply(status.format_text())

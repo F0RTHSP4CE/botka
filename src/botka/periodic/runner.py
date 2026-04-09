@@ -54,6 +54,8 @@ async def periodic_loop(
             args=[job, context],
             id=job.name,
             replace_existing=True,
+            coalesce=True,
+            misfire_grace_time=None,
         )
     scheduler.start()
     try:
@@ -77,6 +79,7 @@ def _build_trigger(job: PeriodicJob, timezone=None):
         return CronTrigger(
             hour=job.cron_hour,
             minute=job.cron_minute,
+            day_of_week=job.cron_day_of_week,
             timezone=timezone,
         )
     return None

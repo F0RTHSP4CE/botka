@@ -33,6 +33,8 @@ async def ups_discharge_report(context: PeriodicContext) -> None:
     except Exception:
         logger.exception("UPS periodic check: failed to fetch status")
         return
+    if status is None:
+        return
 
     now = time.monotonic()
     discharging = status.is_discharging

@@ -71,16 +71,20 @@ class UpsClient:
     def is_configured(self) -> bool:
         return bool(self._base_url)
 
-    async def get_status(self) -> UpsStatus:
+    async def get_status(self) -> UpsStatus | None:
         """Fetch all sensor values from the ESPHome device and return a UpsStatus."""
         sensors: dict[str, float | None] = {}
         text_sensors: dict[str, str | None] = {}
 
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            for name in _SENSOR_NAMES:
-                sensors[name] = await self._read_sensor(client, name)
-            for name in _TEXT_SENSOR_NAMES:
-                text_sensors[name] = await self._read_text_sensor(client, name)
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                for name in _SENSOR_NAMES:
+                    sensors[name] = await self._read_sensor(client, name)
+                for name in _TEXT_SENSOR_NAMES:
+                    text_sensors[name] = await self._read_text_sensor(client, name)
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            logger.warning("UPS device is unreachable at %s", self._base_url)
+            return None
 
         return UpsStatus(
             battery_charge=sensors.get("Battery Charge"),
@@ -99,6 +103,8 @@ class UpsClient:
             resp.raise_for_status()
             data = resp.json()
             return data.get("value")
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise
         except Exception:
             logger.warning("Failed to read sensor %s", name, exc_info=True)
             return None
@@ -112,6 +118,8 @@ class UpsClient:
             resp.raise_for_status()
             data = resp.json()
             return data.get("value")
+        except (httpx.ConnectError, httpx.ConnectTimeout):
+            raise
         except Exception:
             logger.warning("Failed to read text sensor %s", name, exc_info=True)
             return None
