@@ -48,33 +48,29 @@ class BorrowedItemDetector:
                     "Borrowed detector HTTP error: %s",
                     response.status_code,
                 )
-                fallback = self._fallback_parse_items(clean_text)
-                return fallback or ([clean_text] if clean_text else ["unknown item"])
+                return self._fallback_parse_items(clean_text)
             data: dict[str, Any] = response.json()
             text_out = self._extract_text_output(data)
             if not text_out:
                 logger.warning("Borrowed detector empty output text.")
-                fallback = self._fallback_parse_items(clean_text)
-                return fallback or ([clean_text] if clean_text else ["unknown item"])
+                return self._fallback_parse_items(clean_text)
             parsed = self._parse_json(text_out)
-            items = self._coerce_items(parsed) if parsed else []
-            if items:
-                normalized = self._normalize_items(items)
+            if parsed is not None:
+                items = self._coerce_items(parsed)
+                normalized = self._normalize_items(items) if items else []
                 logger.info(
                     "Borrowed detector parsed %d item(s).",
                     len(normalized),
                 )
                 return normalized
             logger.info(
-                "Borrowed detector parsed no items; using fallback. Output: %s",
+                "Borrowed detector failed to parse JSON; using fallback. Output: %s",
                 text_out,
             )
-            fallback = self._fallback_parse_items(clean_text)
-            return fallback or ([clean_text] if clean_text else ["unknown item"])
+            return self._fallback_parse_items(clean_text)
         except Exception:
             logger.exception("Borrowed detector failed; using fallback parser.")
-            fallback = self._fallback_parse_items(clean_text)
-            return fallback or ([clean_text] if clean_text else ["unknown item"])
+            return self._fallback_parse_items(clean_text)
 
     def _build_payload(
         self,
@@ -85,11 +81,17 @@ class BorrowedItemDetector:
             {
                 "type": "input_text",
                 "text": (
-                    "You are extracting borrowed item names from a Telegram message. "
+                    "You are analyzing a Telegram message from a 'borrowed items' chat topic. "
+                    "People use this topic both to report borrowing physical items AND for casual chat/discussion. "
+                    "Your task: determine if the message is actually about someone borrowing/taking a physical item. "
                     "Return JSON only with key 'items' as an array of strings. "
-                    "If no borrowed item is described, return {'items': []}. "
-                    "Keep each item short (1-5 words), no durations. "
-                    "If text is empty, infer the item(s) from the image(s) when possible. "
+                    "If the message is casual conversation, a question, a greeting, a reply to someone, "
+                    "a status update, or anything NOT about borrowing a specific physical item, "
+                    'return {"items": []}. '
+                    "Only extract item names when the person is clearly stating they are taking/borrowing something. "
+                    "Keep each item short (1-5 words), no durations or descriptions. "
+                    "If text is empty, infer the item(s) from the image(s) only if the image clearly shows "
+                    "an item being taken or borrowed. "
                     f"Message text: {text or '<<no text>>'}"
                 ),
             }
@@ -164,15 +166,25 @@ class BorrowedItemDetector:
             normalized.append(trimmed)
         return normalized
 
+    _BORROW_PATTERN = re.compile(
+        r"^(took|take|taking|borrowed|borrowing|borrow|grabbed|grabbing|"
+        r"picked up|picking up|взял[аи]?|забрал[аи]?|беру|забираю)"
+        r"\s+",
+        re.IGNORECASE,
+    )
+
     def _fallback_parse_items(self, text: str) -> list[str]:
         if not text:
             return []
-        cleaned = re.sub(r"^(took|borrowed|grabbed|picked up)\s+", "", text, flags=re.I)
-        cleaned = re.sub(r"\s+(for|until)\s+.+$", "", cleaned, flags=re.I)
+        match = self._BORROW_PATTERN.match(text)
+        if not match:
+            return []
+        cleaned = text[match.end() :]
+        cleaned = re.sub(r"\s+(for|until|на|до)\s+.+$", "", cleaned, flags=re.I)
         cleaned = cleaned.strip(" .!\n\t")
         if not cleaned:
             return []
-        parts = re.split(r"\s*(?:,|&|\band\b)\s*", cleaned, flags=re.I)
+        parts = re.split(r"\s*(?:,|&|\band\b|\bи\b)\s*", cleaned, flags=re.I)
         if len(parts) <= 1:
             return [cleaned]
         items = [part.strip(" .!\n\t") for part in parts if part.strip(" .!\n\t")]
