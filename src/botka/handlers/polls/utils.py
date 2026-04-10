@@ -109,11 +109,21 @@ async def refresh_awaiting_message(
     target_ids = {user.telegram_id for user in target_users}
     warning_ids = [user_id for user_id in voted_ids if user_id not in target_ids]
     warning_users = list(await user_service.list_users_by_telegram_ids(warning_ids))
+    author_users = await user_service.list_users_by_telegram_ids(
+        [poll.author_telegram_id]
+    )
+    author_username = author_users[0].username if author_users else None
     try:
         await bot.edit_message_text(
             chat_id=poll.chat_id,
             message_id=poll.awaiting_message_id,
-            text=build_awaiting_text(awaiting_users, poll.closes_at, warning_users),
+            text=build_awaiting_text(
+                awaiting_users,
+                closes_at=poll.closes_at,
+                warning_users=warning_users,
+                author_telegram_id=poll.author_telegram_id,
+                author_username=author_username,
+            ),
             disable_web_page_preview=True,
         )
     except TelegramBadRequest as exc:
@@ -125,6 +135,9 @@ def build_awaiting_text(
     users: list[User],
     closes_at: datetime,
     warning_users: list[User] | None = None,
+    *,
+    author_telegram_id: int | None = None,
+    author_username: str | None = None,
 ) -> str:
     closes_label = format_close_time(closes_at)
     remaining_label = format_remaining_time(closes_at)
@@ -139,8 +152,16 @@ def build_awaiting_text(
 
     lines = [
         f"Closes in <b>{remaining_label}</b> ({closes_label})",
-        awaiting_line,
     ]
+    if author_telegram_id is not None:
+        author_link = format_user_link(
+            telegram_id=author_telegram_id,
+            username=author_username,
+        )
+        lines.append(f"Author: {author_link}")
+    lines.append(
+        awaiting_line,
+    )
 
     if warning_users:
         warning_mentions = ", ".join(

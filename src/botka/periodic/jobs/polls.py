@@ -5,6 +5,7 @@ import html
 
 from aiogram.types import Poll as TelegramPoll
 
+from botka.handlers.user_links import format_user_link
 from botka.periodic.jobs.base import PeriodicContext
 from botka.handlers.polls.utils import format_close_time, refresh_awaiting_message
 from botka.services.polls_service import PollsService
@@ -37,8 +38,17 @@ async def poll_maintenance(context: PeriodicContext) -> None:
                 if start_at.tzinfo is None:
                     start_at = start_at.replace(tzinfo=timezone.utc)
                 elapsed_label = _format_elapsed_duration(start_at, now)
+                author_users = await user_service.list_users_by_telegram_ids(
+                    [poll.author_telegram_id]
+                )
+                author_user = author_users[0] if author_users else None
+                author_link = format_user_link(
+                    telegram_id=poll.author_telegram_id,
+                    username=author_user.username if author_user else None,
+                )
                 message = (
                     "Poll closed (auto).\n"
+                    f"Author: {author_link}\n"
                     f"Start: {format_close_time(start_at)}\n"
                     f"End: {format_close_time(now)}\n"
                     f"Closed after {elapsed_label}."

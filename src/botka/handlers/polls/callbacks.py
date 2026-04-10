@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.handlers.polls.utils import format_close_time
+from botka.handlers.user_links import format_user_link
 from botka.services.polls_service import PollsService
 
 router = Router(name=__name__)
@@ -30,11 +31,13 @@ async def close_poll_callback(
     await polls_service.mark_closed(poll_id)
     if poll.awaiting_message_id is not None:
         now = datetime.now(timezone.utc)
+        now_label = format_close_time(now)
+        author_link = format_user_link(user=callback.from_user)
         if now < poll.closes_at:
             close_label = format_close_time(poll.closes_at)
-            text = f"Poll closed early by author. Scheduled close was {close_label}."
+            text = f"Poll closed early by {author_link} at {now_label}. Scheduled close was {close_label}."
         else:
-            text = "Poll closed."
+            text = f"Poll closed by {author_link} at {now_label}."
         await callback.bot.edit_message_text(
             chat_id=poll.chat_id,
             message_id=poll.awaiting_message_id,

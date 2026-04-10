@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from aiogram import F, Router
-from aiogram.enums import PollType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InputPollOption, InputPollOptionUnion, Message
 from typing import cast
@@ -33,13 +32,20 @@ async def poll_message_handler(
     parsed = parse_poll_question(message.poll.question)
     if parsed is None:
         return
-    if message.poll.type == PollType.QUIZ:
-        await message.reply("Quiz polls are not supported.")
-        return
-    options = [InputPollOption(text=option.text) for option in message.poll.options]
+    options = [
+        InputPollOption(text=option.text, text_entities=option.text_entities)
+        for option in message.poll.options
+    ]
     reply_to_message_id = (
         message.reply_to_message.message_id if message.reply_to_message else None
     )
+    closes_at = poll_close_at(
+        datetime.now(timezone.utc),
+        close_hours=settings.polls_default_close_hours,
+    )
+    open_period_seconds = settings.polls_default_close_hours * 3600
+    # Telegram supports auto-close up to 2628000 seconds (~30.4 days)
+    close_date = closes_at if open_period_seconds <= 2628000 else None
     new_poll = await message.bot.send_poll(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
@@ -48,26 +54,23 @@ async def poll_message_handler(
         reply_to_message_id=reply_to_message_id,
         is_anonymous=False,
         allows_multiple_answers=message.poll.allows_multiple_answers,
-        type=message.poll.type,
-        correct_option_id=(
-            message.poll.correct_option_id
-            if message.poll.type == PollType.QUIZ
-            else None
-        ),
-        explanation=(
-            message.poll.explanation if message.poll.type == PollType.QUIZ else None
-        ),
+        allows_revoting=True,
+        close_date=close_date,
+        description=message.poll.description,
+        description_entities=message.poll.description_entities,
     )
     if new_poll.poll is None:
         return
     option_texts = [option.text for option in message.poll.options]
     ignored_option_ids = register_poll_ignored_options(new_poll.poll.id, option_texts)
-    closes_at = poll_close_at(
-        datetime.now(timezone.utc),
-        close_hours=settings.polls_default_close_hours,
-    )
     target_users = list(await polls_service.list_target_users(parsed.audience))
-    awaiting_text = build_awaiting_text(target_users, closes_at)
+    awaiting_text = build_awaiting_text(
+        target_users,
+        closes_at,
+        author_telegram_id=message.from_user.id,
+        author_username=message.from_user.username,
+    )
+
     awaiting_message = await message.bot.send_message(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
