@@ -34,33 +34,33 @@ async def send_meeting_agenda(context: PeriodicContext) -> None:
         service = MeetingService(session)
         topics = await service.get_topics_since(since)
 
+        if not topics:
+            return
+
         lines = [
             "📋 <b>Weekly Meeting Agenda</b>",
             "",
         ]
 
-        if topics:
-            user_ids = list({t.user_id for t in topics})
-            result = await session.execute(select(User).where(User.id.in_(user_ids)))
-            users_by_id = {u.id: u for u in result.scalars().all()}
+        user_ids = list({t.user_id for t in topics})
+        result = await session.execute(select(User).where(User.id.in_(user_ids)))
+        users_by_id = {u.id: u for u in result.scalars().all()}
 
-            for i, topic in enumerate(topics, 1):
-                user = users_by_id.get(topic.user_id)
-                if user:
-                    author = format_user_link(
-                        telegram_id=user.telegram_id,
-                        username=user.username,
-                    )
-                else:
-                    author = "Unknown"
-                link = _build_message_link(topic.chat_id, topic.message_id)
-                if link:
-                    index = f'<a href="{link}">{i}</a>'
-                else:
-                    index = str(i)
-                lines.append(f"{index}. {html.escape(topic.text)} — {author}")
-        else:
-            lines.append("No agenda topics this week.")
+        for i, topic in enumerate(topics, 1):
+            user = users_by_id.get(topic.user_id)
+            if user:
+                author = format_user_link(
+                    telegram_id=user.telegram_id,
+                    username=user.username,
+                )
+            else:
+                author = "Unknown"
+            link = _build_message_link(topic.chat_id, topic.message_id)
+            if link:
+                index = f'<a href="{link}">{i}</a>'
+            else:
+                index = str(i)
+            lines.append(f"{index}. {html.escape(topic.text)} — {author}")
 
         lines += [
             "",
