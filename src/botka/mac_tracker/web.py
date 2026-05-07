@@ -274,6 +274,7 @@ async def run_mac_tracker_server(
         host=settings.mac_tracker_bind_host,
         port=settings.mac_tracker_bind_port,
         log_level="info",
+        log_config=None,
     )
     server = uvicorn.Server(config)
     await server.serve()
