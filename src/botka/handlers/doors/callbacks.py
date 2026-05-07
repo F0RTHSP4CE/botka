@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from dishka.integrations.aiogram import FromDishka, inject
 
@@ -52,6 +53,12 @@ async def open_door_callback(
                 reply_markup=None,
             )
         return
+    await callback.answer()
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            return
     on_behalf_of = callback.from_user.username or str(callback.from_user.id)
     if door_id == DOOR_BOTH_ID:
         gate_opened = await usbutler_service.open_door(DOOR_GATE_ID, on_behalf_of)
@@ -78,7 +85,3 @@ async def open_door_callback(
             text = f"❌ Failed to open the {label}."
     if callback.message is not None:
         await callback.message.edit_text(text, reply_markup=None)
-    await callback.answer(
-        "Door opened." if opened else "Failed to open door.",
-        show_alert=not opened,
-    )
