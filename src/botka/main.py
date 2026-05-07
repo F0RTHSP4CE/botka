@@ -44,6 +44,7 @@ from botka.services.planka_poller import run_planka_poller
 async def _run() -> None:
     logging.basicConfig(level=logging.INFO)
     logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     settings = Settings()
     if not settings.mac_tracker_jwt_secret:
         settings.mac_tracker_jwt_secret = secrets.token_urlsafe(48)
