@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from botka.config import Settings
 from botka.db.models import User, UserTier
-from botka.handlers.menu import Btn
 from botka.periodic.runner import run_periodic_job
 from botka.periodic.schedule import build_schedule
 
@@ -71,15 +70,6 @@ async def periodic_run_handler(
         await message.reply("Unknown job. Use /periodic to list available jobs.")
         return
     await message.reply(f"Triggered periodic job: {html.escape(job_name)}")
-
-
-@router.message(F.text == Btn.PERIODIC, F.chat.type == "private")
-@inject
-async def menu_periodic_message(
-    message: Message,
-    settings: FromDishka[Settings],
-) -> None:
-    await _do_periodic(message, settings)
 
 
 def _format_job_schedule(job) -> str:
