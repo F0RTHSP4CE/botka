@@ -156,6 +156,19 @@ async def menu_status_message(
     await _do_status(message, user_service, mac_tracker, user_record)
 
 
+@router.message(F.text == Btn.ADD_MAC, F.chat.type == "private")
+@inject
+async def menu_add_mac_message(
+    message: Message,
+    settings: FromDishka[Settings],
+    mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
+) -> None:
+    if message.from_user is None:
+        return
+    await _do_mac(message, settings, mac_tracker, user_record, message.from_user.id)
+
+
 @router.message(Command("mac_clear"))
 @inject
 async def mac_clear_handler(

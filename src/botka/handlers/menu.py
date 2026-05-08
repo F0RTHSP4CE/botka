@@ -48,7 +48,7 @@ class Btn:
     AGENDA = "📅 Agenda"
     NEED_ITEM = "➕ Need item"
     TASK = "📋 Task"
-    PERIODIC = "⚙️ Periodic"
+    ADD_MAC = "🖥️ Add my MAC"
     BACK = "← Back"
 
     # FSM control
@@ -87,11 +87,10 @@ def guest_menu_kb() -> ReplyKeyboardMarkup:
 def other_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=Btn.NEEDS), KeyboardButton(text=Btn.BORROWED)],
-            [KeyboardButton(text=Btn.TODO), KeyboardButton(text=Btn.BOARDS)],
+            [KeyboardButton(text=Btn.NEEDS), KeyboardButton(text=Btn.NEED_ITEM)],
+            [KeyboardButton(text=Btn.BORROWED), KeyboardButton(text=Btn.TODO)],
             [KeyboardButton(text=Btn.UPS), KeyboardButton(text=Btn.TRANSACTIONS)],
-            [KeyboardButton(text=Btn.AGENDA), KeyboardButton(text=Btn.NEED_ITEM)],
-            [KeyboardButton(text=Btn.TASK), KeyboardButton(text=Btn.PERIODIC)],
+            [KeyboardButton(text=Btn.AGENDA), KeyboardButton(text=Btn.ADD_MAC)],
             [KeyboardButton(text=Btn.BACK)],
         ],
         resize_keyboard=True,
