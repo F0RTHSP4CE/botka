@@ -13,11 +13,12 @@ import asyncio
 import html
 from decimal import Decimal, InvalidOperation
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
+from botka.handlers.menu import Btn, send_main_menu
 from botka.services.refinance_client import RefinanceClient
 from botka.services.user_service import UserService
 
@@ -381,38 +382,12 @@ async def request_handler(
 # ------------------------------------------------------------------ #
 
 
-@router.message(Command("balance"))
-@inject
-async def balance_handler(
+async def _do_balance_for_entity(
     message: Message,
-    command: CommandObject,
-    refinance: FromDishka[RefinanceClient],
-    user_service: FromDishka[UserService],
+    refinance: RefinanceClient,
+    entity: dict,
+    viewing_other: bool = False,
 ) -> None:
-    if message.from_user is None:
-        await message.reply("Cannot determine sender.")
-        return
-    if not refinance.is_configured:
-        await message.reply(_NOT_CONFIGURED)
-        return
-
-    args = (command.args or "").split()
-    viewing_other = False
-
-    if args and args[0].startswith("@"):
-        entity = await _resolve_target_by_username(refinance, user_service, args[0])
-        if entity is None:
-            await message.reply(f"User {html.escape(args[0])} not found in refinance.")
-            return
-        viewing_other = True
-    else:
-        entity = await _resolve_self(
-            refinance, message.from_user.id, message.from_user.username
-        )
-        if entity is None:
-            await message.reply(_NOT_LINKED)
-            return
-
     entity_id = entity["id"]
     try:
         balance, pending_invoices, last_txs = await asyncio.gather(
@@ -471,17 +446,13 @@ async def balance_handler(
     await message.reply("\n".join(lines))
 
 
-# ------------------------------------------------------------------ #
-# /deposit                                                              #
-# ------------------------------------------------------------------ #
-
-
-@router.message(Command("deposit"))
+@router.message(Command("balance"))
 @inject
-async def deposit_handler(
+async def balance_handler(
     message: Message,
     command: CommandObject,
     refinance: FromDishka[RefinanceClient],
+    user_service: FromDishka[UserService],
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
@@ -491,23 +462,67 @@ async def deposit_handler(
         return
 
     args = (command.args or "").split()
-    if len(args) < 2:
-        await message.reply("Usage: <code>/deposit 10 GEL</code>")
-        return
+    viewing_other = False
 
-    parsed = _parse_amount_currency(args)
-    if parsed is None:
-        await message.reply("Invalid amount or currency.")
-        return
-    amount, currency = parsed
+    if args and args[0].startswith("@"):
+        entity = await _resolve_target_by_username(refinance, user_service, args[0])
+        if entity is None:
+            await message.reply(f"User {html.escape(args[0])} not found in refinance.")
+            return
+        viewing_other = True
+    else:
+        entity = await _resolve_self(
+            refinance, message.from_user.id, message.from_user.username
+        )
+        if entity is None:
+            await message.reply(_NOT_LINKED)
+            return
 
+    await _do_balance_for_entity(message, refinance, entity, viewing_other)
+
+
+@router.message(F.text == Btn.BALANCE, F.chat.type == "private")
+@inject
+async def menu_balance_message(
+    message: Message,
+    refinance: FromDishka[RefinanceClient],
+    user_service: FromDishka[UserService],
+) -> None:
+    if message.from_user is None:
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
     entity = await _resolve_self(
         refinance, message.from_user.id, message.from_user.username
     )
     if entity is None:
         await message.reply(_NOT_LINKED)
         return
+    await _do_balance_for_entity(message, refinance, entity)
 
+
+# ------------------------------------------------------------------ #
+# /deposit                                                              #
+# ------------------------------------------------------------------ #
+
+
+async def _do_deposit(
+    message: Message,
+    refinance: RefinanceClient,
+    sender_id: int,
+    sender_username: str | None,
+    amount: str,
+    currency: str,
+) -> None:
+    """Create a Keepz deposit and reply with the payment link."""
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+    entity = await _resolve_self(refinance, sender_id, sender_username)
+    if entity is None:
+        await message.reply(_NOT_LINKED)
+        return
     try:
         deposit = await refinance.create_keepz_deposit(
             entity_id=entity["id"],
@@ -517,14 +532,11 @@ async def deposit_handler(
     except Exception as exc:
         await message.reply(f"Failed to create deposit: {html.escape(str(exc))}")
         return
-
     details = (deposit.get("details") or {}).get("keepz") or {}
     payment_url = details.get("payment_url") or details.get("payment_short_url")
-
     text = f"💳 Deposit <b>{html.escape(amount)} {html.escape(currency)}</b> created."
     if not payment_url:
         text += "\nPayment link not available yet."
-
     deposit_id = deposit.get("id")
     check_kb = None
     if deposit_id is not None:
@@ -542,16 +554,15 @@ async def deposit_handler(
             [
                 InlineKeyboardButton(
                     text="🔄 Check payment",
-                    callback_data=f"rf_dep:check:{deposit_id}:{entity['id']}:{message.from_user.id}",
+                    callback_data=f"rf_dep:check:{deposit_id}:{entity['id']}:{sender_id}",
                 )
             ]
         )
         check_kb = InlineKeyboardMarkup(inline_keyboard=rows)
-
     if message.chat.type != "private":
         try:
             await message.bot.send_message(
-                chat_id=message.from_user.id,
+                chat_id=sender_id,
                 text=text,
                 disable_web_page_preview=False,
                 reply_markup=check_kb,
@@ -565,9 +576,152 @@ async def deposit_handler(
         await message.reply(text, disable_web_page_preview=False, reply_markup=check_kb)
 
 
+async def _do_transfer_draft(
+    message: Message,
+    refinance: RefinanceClient,
+    user_service: UserService,
+    sender_id: int,
+    sender_username: str | None,
+    target_username: str,
+    amount: str,
+    currency: str,
+    comment: str | None = None,
+) -> None:
+    """Create a draft transfer transaction and reply with confirm/cancel keyboard."""
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+    actor_entity, target_entity = await asyncio.gather(
+        _resolve_self(refinance, sender_id, sender_username),
+        _resolve_target_by_username(refinance, user_service, target_username),
+    )
+    if actor_entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+    if target_entity is None:
+        await message.reply(
+            f"User {html.escape(target_username)} not found in refinance."
+        )
+        return
+    actor_entity_id = actor_entity["id"]
+    target_entity_id = target_entity["id"]
+    try:
+        tx = await refinance.create_transaction(
+            actor_entity_id=actor_entity_id,
+            from_entity_id=actor_entity_id,
+            to_entity_id=target_entity_id,
+            amount=amount,
+            currency=currency,
+            status="draft",
+            comment=comment,
+        )
+    except Exception as exc:
+        await message.reply(f"Failed to create transfer: {html.escape(str(exc))}")
+        return
+    tx_id: int = tx["id"]
+    target_name = html.escape(target_entity["name"])
+    target_mention = target_username if target_username.startswith("@") else target_name
+    body = (
+        f"{target_mention} — <b>{html.escape(actor_entity['name'])}</b> wants to "
+        f"transfer <b>{html.escape(amount)} {html.escape(currency)}</b> to you "
+        f"(tx #{tx_id})."
+    )
+    api_comment = tx.get("comment") or comment
+    if api_comment:
+        body += f"\nComment: <i>{html.escape(api_comment)}</i>"
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"✅ Confirm: {amount} {currency} → {target_name}",
+                    callback_data=f"rf_tx:confirm:{tx_id}:{actor_entity_id}:{sender_id}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Cancel",
+                    callback_data=f"rf_tx:cancel:{tx_id}:{actor_entity_id}:{sender_id}",
+                ),
+            ]
+        ]
+    )
+    await message.reply(body, reply_markup=keyboard)
+
+
+@router.message(Command("deposit"))
+@inject
+async def deposit_handler(
+    message: Message,
+    command: CommandObject,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if message.from_user is None:
+        await message.reply("Cannot determine sender.")
+        return
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+    args = (command.args or "").split()
+    if len(args) < 2:
+        await message.reply("Usage: <code>/deposit 10 GEL</code>")
+        return
+    parsed = _parse_amount_currency(args)
+    if parsed is None:
+        await message.reply("Invalid amount or currency.")
+        return
+    amount, currency = parsed
+    await _do_deposit(
+        message,
+        refinance,
+        message.from_user.id,
+        message.from_user.username,
+        amount,
+        currency,
+    )
+
+
 # ------------------------------------------------------------------ #
 # /transactions                                                         #
 # ------------------------------------------------------------------ #
+
+
+async def _do_transactions(
+    message: Message,
+    refinance: RefinanceClient,
+    sender_id: int,
+    sender_username: str | None,
+) -> None:
+    if not refinance.is_configured:
+        await message.reply(_NOT_CONFIGURED)
+        return
+    entity = await _resolve_self(refinance, sender_id, sender_username)
+    if entity is None:
+        await message.reply(_NOT_LINKED)
+        return
+    try:
+        txs = await refinance.get_transactions(entity["id"], limit=10)
+    except Exception as exc:
+        await message.reply(f"Error: {html.escape(str(exc))}")
+        return
+    if not txs:
+        await message.reply("No transactions yet.")
+        return
+    lines = ["<b>Last transactions:</b>"]
+    for tx in txs:
+        from_name = html.escape((tx.get("from_entity") or {}).get("name", "?"))
+        to_name = html.escape((tx.get("to_entity") or {}).get("name", "?"))
+        status_emoji = "✅" if tx["status"] == "completed" else "📋"
+        lines.append(
+            f"{status_emoji} #{tx['id']} {from_name} → {to_name}: "
+            f"{tx['amount']} {tx['currency'].upper()}"
+        )
+    text = "\n".join(lines)
+    if message.chat.type != "private":
+        try:
+            await message.bot.send_message(chat_id=sender_id, text=text)
+            await message.reply("📊 Transaction history sent to your private messages.")
+        except Exception:
+            await message.reply(text)
+    else:
+        await message.reply(text)
 
 
 @router.message(Command("transactions"))
@@ -579,46 +733,19 @@ async def transactions_handler(
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
         return
-    if not refinance.is_configured:
-        await message.reply(_NOT_CONFIGURED)
-        return
-
-    entity = await _resolve_self(
-        refinance, message.from_user.id, message.from_user.username
+    await _do_transactions(
+        message, refinance, message.from_user.id, message.from_user.username
     )
-    if entity is None:
-        await message.reply(_NOT_LINKED)
+
+
+@router.message(F.text == Btn.TRANSACTIONS, F.chat.type == "private")
+@inject
+async def menu_transactions_message(
+    message: Message,
+    refinance: FromDishka[RefinanceClient],
+) -> None:
+    if message.from_user is None:
         return
-
-    try:
-        txs = await refinance.get_transactions(entity["id"], limit=10)
-    except Exception as exc:
-        await message.reply(f"Error: {html.escape(str(exc))}")
-        return
-
-    if not txs:
-        await message.reply("No transactions yet.")
-        return
-
-    lines = ["<b>Last transactions:</b>"]
-    for tx in txs:
-        from_name = html.escape((tx.get("from_entity") or {}).get("name", "?"))
-        to_name = html.escape((tx.get("to_entity") or {}).get("name", "?"))
-        status_emoji = "✅" if tx["status"] == "completed" else "📋"
-        lines.append(
-            f"{status_emoji} #{tx['id']} {from_name} → {to_name}: "
-            f"{tx['amount']} {tx['currency'].upper()}"
-        )
-
-    text = "\n".join(lines)
-    if message.chat.type != "private":
-        try:
-            await message.bot.send_message(
-                chat_id=message.from_user.id,
-                text=text,
-            )
-            await message.reply("📊 Transaction history sent to your private messages.")
-        except Exception:
-            await message.reply(text)
-    else:
-        await message.reply(text)
+    await _do_transactions(
+        message, refinance, message.from_user.id, message.from_user.username
+    )

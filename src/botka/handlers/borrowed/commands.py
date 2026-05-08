@@ -3,11 +3,11 @@ from __future__ import annotations
 import html
 from datetime import datetime, timezone
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
-
+from botka.handlers.menu import Btn
 from botka.handlers.user_links import format_user_link
 from botka.services.borrowed_items_service import BorrowedItemsService
 from botka.services.user_service import UserService
@@ -15,16 +15,11 @@ from botka.services.user_service import UserService
 router = Router(name=__name__)
 
 
-@router.message(Command("borrowed"))
-@inject
-async def borrowed_list_handler(
+async def _do_borrowed(
     message: Message,
-    user_service: FromDishka[UserService],
-    borrowed_service: FromDishka[BorrowedItemsService],
+    user_service: UserService,
+    borrowed_service: BorrowedItemsService,
 ) -> None:
-    if message.from_user is None:
-        await message.reply("Unknown user.")
-        return
     items = await borrowed_service.list_open_items()
     if not items:
         await message.reply("No borrowed items.")
@@ -51,6 +46,29 @@ async def borrowed_list_handler(
         "Borrowed items:\n" + "\n".join(lines),
         disable_web_page_preview=True,
     )
+
+
+@router.message(Command("borrowed"))
+@inject
+async def borrowed_list_handler(
+    message: Message,
+    user_service: FromDishka[UserService],
+    borrowed_service: FromDishka[BorrowedItemsService],
+) -> None:
+    if message.from_user is None:
+        await message.reply("Unknown user.")
+        return
+    await _do_borrowed(message, user_service, borrowed_service)
+
+
+@router.message(F.text == Btn.BORROWED, F.chat.type == "private")
+@inject
+async def menu_borrowed_message(
+    message: Message,
+    user_service: FromDishka[UserService],
+    borrowed_service: FromDishka[BorrowedItemsService],
+) -> None:
+    await _do_borrowed(message, user_service, borrowed_service)
 
 
 def _format_borrowed_age(created_at: datetime) -> str:

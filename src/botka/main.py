@@ -28,6 +28,9 @@ from botka.handlers import (
     ups,
     users,
 )
+import botka.handlers.menu as menu_handler
+import botka.handlers.refinance.menu as refinance_menu
+import botka.handlers.planka.menu as planka_menu
 from botka.handlers.help.commands import get_bot_commands
 from botka.handlers.pins.messages import NewTopicForwardMiddleware
 from botka.handlers.polls import answers as poll_answers
@@ -81,8 +84,10 @@ async def _run() -> None:
     dp = Dispatcher()
     dp.include_router(help.commands.router)
     dp.include_router(users.commands.router)
+    dp.include_router(menu_handler.router)
     dp.include_router(refinance.commands.router)
     dp.include_router(refinance.callbacks.router)
+    dp.include_router(refinance_menu.router)
     dp.include_router(doors.commands.router)
     dp.include_router(fridge.commands.router)
     dp.include_router(mac_tracker.commands.router)
@@ -95,6 +100,7 @@ async def _run() -> None:
     dp.include_router(shopping.callbacks.router)
     dp.include_router(borrowed.messages.router)
     dp.include_router(planka.commands.router)
+    dp.include_router(planka_menu.router)
     dp.include_router(ups.commands.router)
     dp.include_router(doors.callbacks.router)
     dp.include_router(fridge.callbacks.router)

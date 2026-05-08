@@ -6,8 +6,12 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
+
+from botka.handlers.menu import Btn, cancel_kb, send_main_menu
 
 from botka.config import Settings
 from botka.db.models import User, UserTier
@@ -262,3 +266,39 @@ async def cancel_reply_handler(
             )
         except Exception:
             pass
+
+
+# ── Menu: /agenda dialogue ───────────────────────────────────────
+
+
+class AgendaDialog(StatesGroup):
+    waiting_text = State()
+
+
+@router.message(F.text == Btn.AGENDA, F.chat.type == "private")
+@inject
+async def menu_agenda_start_message(
+    message: Message,
+    state: FSMContext,
+) -> None:
+    await state.set_state(AgendaDialog.waiting_text)
+    await message.reply(
+        "Enter a topic to add to the weekly agenda:",
+        reply_markup=cancel_kb(),
+    )
+
+
+@router.message(AgendaDialog.waiting_text, F.text != Btn.CANCEL)
+@inject
+async def agenda_dialog_text_handler(
+    message: Message,
+    settings: FromDishka[Settings],
+    meeting_service: FromDishka[MeetingService],
+    state: FSMContext,
+    user_record: User | None = None,
+) -> None:
+    await state.clear()
+    if not message.text:
+        return
+    await _handle_agenda_add(message, settings, meeting_service, user_record)
+    await send_main_menu(message)

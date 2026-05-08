@@ -83,6 +83,10 @@ class Settings(BaseSettings):
     fridge_pos_url: str | None = None
     fridge_pos_secret: str | None = None
 
+    # Visit request link (shown to guests in the menu)
+    visit_request_chat_id: str | None = None  # numeric ID or @username / plain username
+    visit_request_topic_id: int | None = None
+
     # Refinance integration
     refinance_api_url: str | None = None
     refinance_secret_key: str | None = None

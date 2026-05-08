@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
@@ -10,18 +10,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from botka.config import Settings
 from botka.db.models import User, UserTier
+from botka.handlers.menu import Btn
 from botka.periodic.runner import run_periodic_job
 from botka.periodic.schedule import build_schedule
 
 router = Router(name=__name__)
 
 
-@router.message(Command("periodic"))
-@inject
-async def periodic_list_handler(
-    message: Message,
-    settings: FromDishka[Settings],
-) -> None:
+async def _do_periodic(message: Message, settings: Settings) -> None:
     jobs = list(build_schedule(settings))
     if not jobs:
         await message.reply("No periodic jobs configured.")
@@ -34,6 +30,15 @@ async def periodic_list_handler(
         "Periodic jobs:\n" + "\n".join(lines),
         disable_web_page_preview=True,
     )
+
+
+@router.message(Command("periodic"))
+@inject
+async def periodic_list_handler(
+    message: Message,
+    settings: FromDishka[Settings],
+) -> None:
+    await _do_periodic(message, settings)
 
 
 @router.message(Command("periodic_run"))
@@ -68,7 +73,31 @@ async def periodic_run_handler(
     await message.reply(f"Triggered periodic job: {html.escape(job_name)}")
 
 
+@router.message(F.text == Btn.PERIODIC, F.chat.type == "private")
+@inject
+async def menu_periodic_message(
+    message: Message,
+    settings: FromDishka[Settings],
+) -> None:
+    await _do_periodic(message, settings)
+
+
 def _format_job_schedule(job) -> str:
+    if job.interval_seconds is not None:
+        seconds = job.interval_seconds
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        minutes = round(seconds / 60)
+        if minutes < 60:
+            return f"{minutes}m"
+        hours = round(minutes / 60)
+        return f"{hours}h"
+    if job.cron_hour is not None or job.cron_minute is not None:
+        hour = job.cron_hour if job.cron_hour is not None else "*"
+        minute = job.cron_minute if job.cron_minute is not None else "*"
+        return f"cron {hour}:{minute}"
+    return "unscheduled"
+
     if job.interval_seconds is not None:
         seconds = job.interval_seconds
         if seconds < 60:

@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import timezone
 from html import escape as html_escape
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
+from botka.handlers.menu import Btn
 from botka.handlers.user_links import format_user_link
 from botka.db.models import User, UserTier
 from botka.services.mac_tracker_service import MacTrackerService
@@ -47,35 +48,29 @@ def _build_clear_keyboard(
     )
 
 
-@router.message(Command("mac"))
-@inject
-async def mac_link_handler(
+async def _do_mac(
     message: Message,
-    settings: FromDishka[Settings],
-    user_service: FromDishka[UserService],
-    mac_tracker: FromDishka[MacTrackerService],
-    user_record: User | None = None,
+    settings: Settings,
+    mac_tracker: MacTrackerService,
+    user_record: User | None,
+    sender_telegram_id: int,
 ) -> None:
-    if message.from_user is None:
-        await message.reply("Cannot determine sender.")
-        return
     if not settings.mac_tracker_base_url:
         await message.reply("MAC tracker is not configured.")
         return
-    user = user_record
-    if user is None:
+    if user_record is None:
         await message.reply("Could not load your user record.")
         return
-    token = await mac_tracker.create_token(user.id)
+    token = await mac_tracker.create_token(user_record.id)
     url = settings.mac_tracker_base_url.rstrip("/") + f"/mac/{token}"
     try:
         await message.bot.send_message(
-            chat_id=message.from_user.id,
+            chat_id=sender_telegram_id,
             text="Open the link below and tap the button to register your device.",
             reply_markup=_build_link_keyboard(url),
             disable_web_page_preview=True,
         )
-        if message.chat.id != message.from_user.id:
+        if message.chat.id != sender_telegram_id:
             await message.reply("Sent you a personal link in DM.")
     except Exception:
         await message.reply(
@@ -83,13 +78,11 @@ async def mac_link_handler(
         )
 
 
-@router.message(Command("status"))
-@inject
-async def status_handler(
+async def _do_status(
     message: Message,
-    user_service: FromDishka[UserService],
-    mac_tracker: FromDishka[MacTrackerService],
-    user_record: User | None = None,
+    user_service: UserService,
+    mac_tracker: MacTrackerService,
+    user_record: User | None,
 ) -> None:
     tier = user_record.tier if user_record else UserTier.guest
     if tier not in (UserTier.resident, UserTier.member):
@@ -124,6 +117,43 @@ async def status_handler(
         "Currently in the space:\n" + "\n".join(lines),
         disable_web_page_preview=True,
     )
+
+
+@router.message(Command("mac"))
+@inject
+async def mac_link_handler(
+    message: Message,
+    settings: FromDishka[Settings],
+    user_service: FromDishka[UserService],
+    mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
+) -> None:
+    if message.from_user is None:
+        await message.reply("Cannot determine sender.")
+        return
+    await _do_mac(message, settings, mac_tracker, user_record, message.from_user.id)
+
+
+@router.message(Command("status"))
+@inject
+async def status_handler(
+    message: Message,
+    user_service: FromDishka[UserService],
+    mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
+) -> None:
+    await _do_status(message, user_service, mac_tracker, user_record)
+
+
+@router.message(F.text == Btn.STATUS, F.chat.type == "private")
+@inject
+async def menu_status_message(
+    message: Message,
+    user_service: FromDishka[UserService],
+    mac_tracker: FromDishka[MacTrackerService],
+    user_record: User | None = None,
+) -> None:
+    await _do_status(message, user_service, mac_tracker, user_record)
 
 
 @router.message(Command("mac_clear"))

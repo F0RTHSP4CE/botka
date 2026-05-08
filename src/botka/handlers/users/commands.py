@@ -6,7 +6,8 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.db.models import UserTier
+from botka.db.models import User, UserTier
+from botka.handlers.menu import send_main_menu
 from botka.handlers.user_links import format_user_link
 from botka.services.user_service import UserService
 
@@ -26,11 +27,13 @@ def _get_explicit_reply_user(message: Message):
 @inject
 async def start_handler(
     message: Message,
+    user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
         return
-    await message.reply("Ready.")
+    if message.chat.type == "private":
+        await send_main_menu(message, user_record)
 
 
 @router.message(Command("user"))

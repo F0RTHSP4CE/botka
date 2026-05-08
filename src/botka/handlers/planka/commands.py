@@ -26,6 +26,7 @@ from aiogram.types import (
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.db.models import User, UserTier
+from botka.handlers.menu import Btn
 from botka.handlers.user_links import format_telegram_username_link
 from botka.services.planka_client import PlankaAttachment, PlankaAuthError, PlankaClientError, PlankaList, PlankaTaskList
 from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
@@ -56,25 +57,31 @@ _ATTACH_MEDIA_GROUP_LOCK = asyncio.Lock()
 
 # --- Handlers ---
 
-@router.message(Command("boards"))
-@inject
-async def boards_command(
+async def _do_boards(
     message: Message,
-    svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    svc: PlankaCommandService,
+    user_record: User | None,
 ) -> None:
     if not _can_use_planka(user_record):
         await _reply_planka_access_denied(message)
         return
     if not svc.is_configured:
-        await message.reply("Planka integration is not configured.", disable_web_page_preview=True, disable_notification=True)
+        await message.reply(
+            "Planka integration is not configured.",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
         return
     loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         boards = await svc.list_boards()
         if not boards:
             await loading_msg.delete()
-            await message.reply("No boards were found for this Planka account.", disable_web_page_preview=True, disable_notification=True)
+            await message.reply(
+                "No boards were found for this Planka account.",
+                disable_web_page_preview=True,
+                disable_notification=True,
+            )
             return
         board_list_results = await asyncio.gather(
             *[svc.get_board_lists(b.id) for b in boards[:20]],
@@ -102,11 +109,91 @@ async def boards_command(
         lists = board_lists.get(b.id, [])
         if lists:
             for lst in lists:
-                all_lines.append(f"  - {html.escape(lst.name)} (id: <code>{html.escape(lst.id)}</code>)")
+                all_lines.append(
+                    f"  - {html.escape(lst.name)} (id: <code>{html.escape(lst.id)}</code>)"
+                )
         else:
             all_lines.append("  (no lists)")
     await loading_msg.delete()
     await _reply_chunked(message, all_lines)
+
+
+async def _do_todo_list(
+    message: Message,
+    svc: PlankaCommandService,
+    user_record: User | None,
+) -> None:
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
+    if not svc.is_configured:
+        await message.reply(
+            "Planka integration is not configured.",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+    if not svc.todo_list_id:
+        await message.reply(
+            "BOTKA_PLANKA_TODO_LIST_ID is not configured.",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+    try:
+        sections = await svc.list_todos()
+    except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
+        await loading_msg.delete()
+        await _reply_planka_error(message, exc)
+        return
+    await loading_msg.delete()
+    await _send_todo_list(message, sections, svc.base_url)
+
+
+async def _do_task_input(
+    message: Message,
+    text: str,
+    svc: PlankaCommandService,
+    attachment_cache: PlankaAttachmentCacheService,
+    user_record: User | None,
+) -> None:
+    """Handle a task lookup or creation from plain text (used by the FSM dialog)."""
+    if not _can_use_planka(user_record):
+        await _reply_planka_access_denied(message)
+        return
+    if not svc.is_configured:
+        await message.reply(
+            "Planka integration is not configured.",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+    task_lookup_input = _parse_task_lookup_input(text)
+    if task_lookup_input is not None:
+        await _send_task_detail_for_input(message, task_lookup_input, svc, attachment_cache)
+        return
+    await _create_todo_from_text(message, text, svc, album=None)
+
+
+@router.message(Command("boards"))
+@inject
+async def boards_command(
+    message: Message,
+    svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
+) -> None:
+    await _do_boards(message, svc, user_record)
+
+
+@router.message(F.text == Btn.BOARDS, F.chat.type == "private")
+@inject
+async def menu_boards_message(
+    message: Message,
+    svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
+) -> None:
+    await _do_boards(message, svc, user_record)
 
 
 @router.message(Command("todo"))
@@ -130,23 +217,23 @@ async def todo_command(
         return
     args = (command.args or "").strip()
     if not args:
-        loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
-        try:
-            sections = await svc.list_todos()
-        except (PlankaClientError, PlankaListNotConfiguredError, PlankaCardNotFoundError) as exc:
-            await loading_msg.delete()
-            await _reply_planka_error(message, exc)
-            return
-        await loading_msg.delete()
-        await _send_todo_list(message, sections, svc.base_url)
+        await _do_todo_list(message, svc, user_record)
         return
-
     task_lookup_input = _parse_task_lookup_input(args)
     if task_lookup_input is not None:
         await _send_task_detail_for_input(message, task_lookup_input, svc, attachment_cache)
         return
-
     await _create_todo_from_text(message, args, svc, album)
+
+
+@router.message(F.text == Btn.TODO, F.chat.type == "private")
+@inject
+async def menu_todo_message(
+    message: Message,
+    svc: FromDishka[PlankaCommandService],
+    user_record: User | None = None,
+) -> None:
+    await _do_todo_list(message, svc, user_record)
 
 
 @router.message(Command("doing"))
@@ -443,8 +530,7 @@ async def track_media_group_messages_for_attach(
 # --- Presentation helpers ---
 
 def _can_use_planka(user_record: User | None) -> bool:
-    tier = user_record.tier if user_record else UserTier.guest
-    return tier in (UserTier.resident, UserTier.member)
+    return True
 
 
 def _parse_task_lookup_input(args: str) -> str | None:
