@@ -1,4 +1,5 @@
 __all__ = [
+    "bambu",
     "borrowed",
     "doors",
     "fridge",

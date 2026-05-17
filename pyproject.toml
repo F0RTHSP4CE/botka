@@ -19,6 +19,7 @@ dependencies = [
     "aiosqlite>=0.20.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.27.0",
+    "bambulabs_api>=2.6.6",
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.0",
 ]

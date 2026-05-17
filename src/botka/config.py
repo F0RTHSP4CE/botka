@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Iterable
 
 from pydantic import Field, field_validator
@@ -83,6 +84,11 @@ class Settings(BaseSettings):
     fridge_pos_url: str | None = None
     fridge_pos_secret: str | None = None
 
+    # Bambu Lab printer integration (LAN mode / access-code auth)
+    # JSON list: [{"name":"X1C","ip":"192.168.1.x","serial":"...","access_code":"..."}]
+    bambu_printers: str | None = None
+    bambu_camera_timeout_seconds: float = 10.0
+
     # Visit request link (shown to guests in the menu)
     visit_request_chat_id: str | None = None  # numeric ID or @username / plain username
     visit_request_topic_id: int | None = None
@@ -91,6 +97,15 @@ class Settings(BaseSettings):
     refinance_api_url: str | None = None
     refinance_secret_key: str | None = None
     refinance_bot_entity_id: int | None = None
+
+    def get_bambu_printer_configs(self) -> list[dict]:
+        """Parse BOTKA_BAMBU_PRINTERS JSON into a list of printer config dicts."""
+        if not self.bambu_printers:
+            return []
+        try:
+            return json.loads(self.bambu_printers)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
     def get_planka_notification_targets(self) -> list[tuple[str, int | None]]:
         """Return [(chat_id, thread_id or None), ...] from BOTKA_PLANKA_NOTIFICATION_CHAT_IDS."""

@@ -27,6 +27,7 @@ from botka.services.refinance_client import RefinanceClient
 from botka.services.ups_client import UpsClient
 from botka.services.user_service import UserService
 from botka.services.usbutler_service import UsbutlerService
+from botka.services.bambu_service import BambuService
 
 
 class AppProvider(Provider):
@@ -159,6 +160,15 @@ class AppProvider(Provider):
         tracker: PlankaAlbumTracker,
     ) -> PlankaCommandService:
         return PlankaCommandService(planka, mappings, settings, tracker)
+
+    @provide(scope=Scope.APP)
+    async def bambu_service(self, settings: Settings) -> AsyncIterable[BambuService]:
+        service = BambuService.from_settings(settings)
+        if service.is_configured:
+            await service.connect_all()
+        yield service
+        if service.is_configured:
+            await service.disconnect_all()
 
 
 def build_container(settings: Settings) -> AsyncContainer:

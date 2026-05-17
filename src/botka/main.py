@@ -27,6 +27,7 @@ from botka.handlers import (
     shopping,
     ups,
     users,
+    bambu,
 )
 import botka.handlers.menu as menu_handler
 import botka.handlers.refinance.menu as refinance_menu
@@ -102,6 +103,8 @@ async def _run() -> None:
     dp.include_router(planka.commands.router)
     dp.include_router(planka_menu.router)
     dp.include_router(ups.commands.router)
+    dp.include_router(bambu.commands.router)
+    dp.include_router(bambu.callbacks.router)
     dp.include_router(doors.callbacks.router)
     dp.include_router(fridge.callbacks.router)
     dp.include_router(borrowed.callbacks.router)

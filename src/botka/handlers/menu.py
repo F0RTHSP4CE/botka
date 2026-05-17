@@ -49,6 +49,7 @@ class Btn:
     NEED_ITEM = "➕ Need item"
     TASK = "📋 Task"
     ADD_MAC = "🖥️ Add my MAC"
+    BAMBU = "🖨️ Bambu 3D printers"
     BACK = "← Back"
 
     # FSM control
@@ -89,9 +90,9 @@ def other_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=Btn.NEEDS), KeyboardButton(text=Btn.NEED_ITEM)],
             [KeyboardButton(text=Btn.BORROWED), KeyboardButton(text=Btn.TODO)],
-            [KeyboardButton(text=Btn.UPS), KeyboardButton(text=Btn.TRANSACTIONS)],
+            [KeyboardButton(text=Btn.BAMBU), KeyboardButton(text=Btn.TRANSACTIONS)],
             [KeyboardButton(text=Btn.AGENDA), KeyboardButton(text=Btn.ADD_MAC)],
-            [KeyboardButton(text=Btn.BACK)],
+            [KeyboardButton(text=Btn.UPS), KeyboardButton(text=Btn.BACK)],
         ],
         resize_keyboard=True,
     )

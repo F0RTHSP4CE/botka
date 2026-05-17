@@ -105,6 +105,11 @@ COMMANDS: list[CommandInfo] = [
     CommandInfo(
         "transactions", "show your last 10 transactions", "Finance (refinance)"
     ),
+    CommandInfo(
+        "bambu",
+        "show Bambu Lab printer statuses and camera (residents/members)",
+        "Printers",
+    ),
 ]
 
 
