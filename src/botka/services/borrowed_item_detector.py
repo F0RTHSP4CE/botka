@@ -19,7 +19,7 @@ class BorrowedItemDetector:
 
     @property
     def is_configured(self) -> bool:
-        return bool(self._settings.openai_api_key)
+        return bool(self._settings.gemini_api_key)
 
     async def detect_item_names(
         self,
@@ -32,15 +32,16 @@ class BorrowedItemDetector:
             return self._fallback_parse_items(clean_text)
         try:
             payload = self._build_payload(clean_text, images)
-            headers = {
-                "Authorization": f"Bearer {self._settings.openai_api_key}",
-                "Content-Type": "application/json",
-            }
-            timeout = httpx.Timeout(self._settings.openai_timeout_seconds)
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{self._settings.gemini_model}:generateContent"
+                f"?key={self._settings.gemini_api_key}"
+            )
+            timeout = httpx.Timeout(self._settings.gemini_timeout_seconds)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
-                    "https://api.openai.com/v1/responses",
-                    headers=headers,
+                    url,
+                    headers={"Content-Type": "application/json"},
                     json=payload,
                 )
             if not response.is_success:
@@ -77,9 +78,8 @@ class BorrowedItemDetector:
         text: str,
         images: list[tuple[bytes, str]] | None,
     ) -> dict[str, Any]:
-        content: list[dict[str, Any]] = [
+        parts: list[dict[str, Any]] = [
             {
-                "type": "input_text",
                 "text": (
                     "You are analyzing a Telegram message from a 'borrowed items' chat topic. "
                     "People use this topic both to report borrowing physical items AND for casual chat/discussion. "
@@ -100,29 +100,32 @@ class BorrowedItemDetector:
             for image_bytes, image_mime in images:
                 mime = image_mime or "image/jpeg"
                 encoded = base64.b64encode(image_bytes).decode("ascii")
-                content.append(
+                parts.append(
                     {
-                        "type": "input_image",
-                        "image_url": f"data:{mime};base64,{encoded}",
+                        "inline_data": {
+                            "mime_type": mime,
+                            "data": encoded,
+                        },
                     }
                 )
         return {
-            "model": self._settings.openai_model,
-            "input": [
+            "contents": [
                 {
                     "role": "user",
-                    "content": content,
+                    "parts": parts,
                 }
             ],
-            "max_output_tokens": 80,
+            "generationConfig": {
+                "maxOutputTokens": 80,
+                "responseMimeType": "application/json",
+            },
         }
 
     def _extract_text_output(self, data: dict[str, Any]) -> str | None:
-        for item in data.get("output", []) or []:
-            for part in item.get("content", []) or []:
-                if part.get("type") == "output_text":
-                    return part.get("text")
-        return None
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError):
+            return None
 
     def _parse_json(self, text_out: str) -> dict[str, Any] | None:
         try:

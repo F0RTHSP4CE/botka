@@ -36,9 +36,9 @@ class Settings(BaseSettings):
     usbutler_base_url: str | None = None
     usbutler_token: str | None = None
     usbutler_timeout_seconds: float = 5.0
-    openai_api_key: str | None = None
-    openai_model: str = "gpt-4o-mini"
-    openai_timeout_seconds: float = 10.0
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.0-flash"
+    gemini_timeout_seconds: float = 10.0
     mac_tracker_base_url: str | None = None
     mac_tracker_bind_host: str = "0.0.0.0"
     mac_tracker_bind_port: int = 1818
