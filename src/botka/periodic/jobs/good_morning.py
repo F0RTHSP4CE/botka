@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from aiogram.types.input_file import BufferedInputFile
-from aiogram.utils.media_group import MediaGroupBuilder
 
 from botka.periodic.jobs.base import PeriodicContext
 
@@ -59,25 +58,11 @@ async def send_good_morning(context: PeriodicContext) -> None:
         lines.append("Weather: <strong>unavailable</strong>")
     text = "\n".join(lines)
     photos = await _fetch_photos(context)
-    random.shuffle(photos)
-    if len(photos) >= 2:
-        media_group = MediaGroupBuilder()
-        for idx, photo in enumerate(photos):
-            if idx == 0:
-                media_group.add_photo(media=photo, caption=text, parse_mode="HTML")
-                continue
-            media_group.add_photo(media=photo)
-        await context.bot.send_media_group(
-            chat_id=context.settings.good_morning_chat_id,
-            message_thread_id=context.settings.good_morning_topic_id,
-            media=media_group.build(),
-        )
-        return
     if photos:
         await context.bot.send_photo(
             chat_id=context.settings.good_morning_chat_id,
             message_thread_id=context.settings.good_morning_topic_id,
-            photo=photos[0],
+            photo=random.choice(photos),
             caption=text,
             parse_mode="HTML",
         )
