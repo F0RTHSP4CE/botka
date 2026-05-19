@@ -11,7 +11,12 @@ from aiogram import Bot
 from botka.config import Settings
 from botka.handlers.planka.notifications import notification_text
 from botka.handlers.user_links import format_telegram_username_link
-from botka.services.planka_client import PlankaActionEvent, PlankaClient, PlankaClientError, PlankaUser
+from botka.services.planka_client import (
+    PlankaActionEvent,
+    PlankaClient,
+    PlankaClientError,
+    PlankaUser,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +35,10 @@ def _extract_telegram_username(description: str) -> str | None:
                 return part
     return None
 
-def _format_planka_author(user_id: str | None, users: list[PlankaUser]) -> tuple[str, bool]:
+
+def _format_planka_author(
+    user_id: str | None, users: list[PlankaUser]
+) -> tuple[str, bool]:
     if not user_id:
         return "Unknown", False
     for u in users:
@@ -99,7 +107,14 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
                 if action.type not in _RELEVANT_TYPES:
                     continue
                 author_html, silent = await _resolve_author(action, page.users, planka)
-                text = notification_text(action, board_name, base_url, author_html)
+                text = notification_text(
+                    action,
+                    board_name,
+                    base_url,
+                    author_html,
+                    notify_new_quests=settings.planka_notify_new_quests,
+                    show_card_links=settings.planka_show_card_links,
+                )
                 if not text:
                     continue
                 for chat_id, thread_id in targets:

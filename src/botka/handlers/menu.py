@@ -41,7 +41,7 @@ class Btn:
     # Other submenu
     NEEDS = "🛒 Shopping list"
     BORROWED = "📦 Borrowed"
-    TODO = "✅ Todo"
+    TODO = "📜 Quests"
     BOARDS = "📌 Boards"
     UPS = "🔋 UPS"
     TRANSACTIONS = "💸 Transactions"

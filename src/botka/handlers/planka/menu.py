@@ -30,7 +30,7 @@ async def menu_task_start(
 ) -> None:
     await state.set_state(TaskDialog.waiting_text)
     await message.reply(
-        "Enter a task ID to look up, or a description to create a new TODO:",
+        "Enter a quest ID to look up, or a description to create a new quest:",
         reply_markup=cancel_kb(),
     )
 

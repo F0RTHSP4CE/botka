@@ -4,14 +4,19 @@ from unittest.mock import AsyncMock
 import pytest
 
 from botka.handlers.planka import commands
-from botka.handlers.planka.commands import _build_card_detail_text, _escape_html_with_telegram_links
+from botka.handlers.planka.commands import (
+    _build_card_detail_text,
+    _escape_html_with_telegram_links,
+)
 from botka.handlers.user_links import format_telegram_username_link, format_user_link
 from botka.services.planka_client import PlankaTask, PlankaTaskList
 from botka.services.planka_command_service import CardDetailResult, CreateTodoResult
 
 
 def test_format_user_link_supports_username_without_telegram_id() -> None:
-    assert format_user_link(username="alice_bot") == format_telegram_username_link("alice_bot")
+    assert format_user_link(username="alice_bot") == format_telegram_username_link(
+        "alice_bot"
+    )
 
 
 def test_escape_html_with_telegram_links_links_usernames_without_raw_mentions() -> None:
@@ -46,14 +51,18 @@ def test_build_card_detail_text_links_telegram_usernames() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_task_detail_for_input_fetches_and_sends_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_send_task_detail_for_input_fetches_and_sends_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     loading_msg = SimpleNamespace(delete=AsyncMock())
     message = SimpleNamespace(
         reply=AsyncMock(return_value=loading_msg),
         from_user=SimpleNamespace(id=1, username="alice_bot"),
         media_group_id=None,
     )
-    detail = CardDetailResult(short_id=35, name="Task", description="", task_lists=[], attachments=[])
+    detail = CardDetailResult(
+        short_id=35, name="Task", description="", task_lists=[], attachments=[]
+    )
     svc = SimpleNamespace(
         is_configured=True,
         todo_list_id="todo-list",
@@ -87,6 +96,7 @@ async def test_create_todo_from_text_creates_todo() -> None:
         is_configured=True,
         todo_list_id="todo-list",
         base_url="https://planka.example",
+        show_card_links=True,
         create_todo=AsyncMock(
             return_value=CreateTodoResult(
                 short_id=91,
@@ -116,7 +126,10 @@ async def test_create_todo_from_text_creates_todo() -> None:
         media_group_id=None,
     )
     assert message.reply.await_count == 2
-    assert message.reply.await_args_list[-1].args[0] == "task 91 created: <a href=\"https://planka.example/cards/card-91\">Write docs</a>"
+    assert (
+        message.reply.await_args_list[-1].args[0]
+        == '📜 Quest #91 created: <a href="https://planka.example/cards/card-91">Write docs</a>'
+    )
 
 
 def test_parse_task_lookup_input_only_treats_single_numeric_token_as_id() -> None:

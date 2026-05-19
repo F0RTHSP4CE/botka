@@ -141,6 +141,14 @@ class PlankaCommandService:
     def base_url(self) -> str:
         return (self._settings.planka_base_url or "").rstrip("/")
 
+    @property
+    def timezone(self) -> str:
+        return self._settings.timezone or "UTC"
+
+    @property
+    def show_card_links(self) -> bool:
+        return self._settings.planka_show_card_links
+
     async def list_boards(self) -> list[PlankaBoard]:
         return await self._planka.list_boards()
 
@@ -171,10 +179,17 @@ class PlankaCommandService:
         short_id_map: dict[str, int] = {}
         if unique_cards:
             details_results, short_id_results = await asyncio.gather(
-                asyncio.gather(*[self._planka.get_card(c.id) for c in unique_cards], return_exceptions=True),
-                asyncio.gather(*[self._mappings.get_or_create_short_id(c.id) for c in unique_cards]),
+                asyncio.gather(
+                    *[self._planka.get_card(c.id) for c in unique_cards],
+                    return_exceptions=True,
+                ),
+                asyncio.gather(
+                    *[self._mappings.get_or_create_short_id(c.id) for c in unique_cards]
+                ),
             )
-            for card, detail, short_id in zip(unique_cards, details_results, short_id_results):
+            for card, detail, short_id in zip(
+                unique_cards, details_results, short_id_results
+            ):
                 detail_map[card.id] = None if isinstance(detail, Exception) else detail
                 short_id_map[card.id] = short_id
 
@@ -207,21 +222,32 @@ class PlankaCommandService:
             return []
 
         details_results, short_id_results = await asyncio.gather(
-            asyncio.gather(*[self._planka.get_card(c.id) for c in recent_cards], return_exceptions=True),
-            asyncio.gather(*[self._mappings.get_or_create_short_id(c.id) for c in recent_cards]),
+            asyncio.gather(
+                *[self._planka.get_card(c.id) for c in recent_cards],
+                return_exceptions=True,
+            ),
+            asyncio.gather(
+                *[self._mappings.get_or_create_short_id(c.id) for c in recent_cards]
+            ),
         )
 
         entries: list[CardEntry] = []
-        for card, detail, short_id in zip(recent_cards, details_results, short_id_results):
+        for card, detail, short_id in zip(
+            recent_cards, details_results, short_id_results
+        ):
             safe_detail = None if isinstance(detail, Exception) else detail
-            assignee = _extract_assignee(safe_detail.description) if safe_detail else None
+            assignee = (
+                _extract_assignee(safe_detail.description) if safe_detail else None
+            )
             entries.append(
                 CardEntry(
                     short_id=short_id,
                     card_id=card.id,
                     name=card.name,
                     has_images=bool(safe_detail and safe_detail.attachments),
-                    has_other_attachments=bool(safe_detail and safe_detail.has_other_attachments),
+                    has_other_attachments=bool(
+                        safe_detail and safe_detail.has_other_attachments
+                    ),
                     assignee=assignee,
                 )
             )
@@ -274,7 +300,9 @@ class PlankaCommandService:
             for group_name, group_items in effective_groups:
                 if not group_items:
                     continue
-                task_list = await self._planka.create_task_list(card.id, name=group_name or "Checklist")
+                task_list = await self._planka.create_task_list(
+                    card.id, name=group_name or "Checklist"
+                )
                 for idx, item_name in enumerate(group_items):
                     await self._planka.create_task(
                         task_list.id,
@@ -287,15 +315,21 @@ class PlankaCommandService:
         if photo_data:
             filename, file_bytes = photo_data
             try:
-                await self._planka.create_attachment(card.id, file_name=filename, file_bytes=file_bytes)
+                await self._planka.create_attachment(
+                    card.id, file_name=filename, file_bytes=file_bytes
+                )
                 attachment_count = 1
             except Exception:
-                logger.exception("Failed to upload photo attachment for card %s", card.id)
+                logger.exception(
+                    "Failed to upload photo attachment for card %s", card.id
+                )
 
         # Annotate description and assign card member when actor is known
         if actor is not None:
             telegram_id, telegram_username = actor
-            actor_label = f"@{telegram_username}" if telegram_username else f"tg:{telegram_id}"
+            actor_label = (
+                f"@{telegram_username}" if telegram_username else f"tg:{telegram_id}"
+            )
             new_description = _append_meta_event(
                 card.description,
                 f"Created by {actor_label} ({_now_label()})",
@@ -316,28 +350,38 @@ class PlankaCommandService:
             attachment_count=attachment_count,
         )
 
-    async def _expire_pending_album(self, media_group_id: str, delay: float = 3.0) -> None:
+    async def _expire_pending_album(
+        self, media_group_id: str, delay: float = 3.0
+    ) -> None:
         await asyncio.sleep(delay)
         self._tracker.discard(media_group_id)
 
     def get_album_future(self, media_group_id: str) -> asyncio.Future[str] | None:
         return self._tracker.get(media_group_id)
 
-    async def upload_album_photo(self, card_id: str, filename: str, photo_bytes: bytes) -> bool:
+    async def upload_album_photo(
+        self, card_id: str, filename: str, photo_bytes: bytes
+    ) -> bool:
         try:
-            await self._planka.create_attachment(card_id, file_name=filename, file_bytes=photo_bytes)
+            await self._planka.create_attachment(
+                card_id, file_name=filename, file_bytes=photo_bytes
+            )
             return True
         except Exception:
             logger.exception("Failed to upload album photo for card %s", card_id)
             return False
 
-    async def attach_file(self, input_id: str, filename: str, file_bytes: bytes) -> AttachFileResult:
+    async def attach_file(
+        self, input_id: str, filename: str, file_bytes: bytes
+    ) -> AttachFileResult:
         card_id = await self._mappings.resolve_card_id(input_id)
         if not card_id:
             raise PlankaCardNotFoundError(input_id)
         detail = await self._planka.get_card(card_id)
         card_name = detail.name if detail else input_id
-        await self._planka.create_attachment(card_id, file_name=filename, file_bytes=file_bytes)
+        await self._planka.create_attachment(
+            card_id, file_name=filename, file_bytes=file_bytes
+        )
         return AttachFileResult(card_id=card_id, card_name=card_name, filename=filename)
 
     async def move_task(
@@ -356,11 +400,15 @@ class PlankaCommandService:
         detail = await self._planka.get_card(card_id)
         card_name = detail.name if detail else input_id
         current_description = detail.description if detail else ""
-        await self._planka.move_card(card_id, target_list_id, position=0.0 if position_at_top else None)
+        await self._planka.move_card(
+            card_id, target_list_id, position=0.0 if position_at_top else None
+        )
 
         if actor is not None:
             telegram_id, telegram_username = actor
-            actor_label = f"@{telegram_username}" if telegram_username else f"tg:{telegram_id}"
+            actor_label = (
+                f"@{telegram_username}" if telegram_username else f"tg:{telegram_id}"
+            )
 
             # Determine which event label to use based on target list
             if target_list_id == self._settings.planka_done_list_id:
@@ -368,7 +416,11 @@ class PlankaCommandService:
             elif target_list_id == self._settings.planka_doing_list_id:
                 # Skip annotation if the task is already taken by this actor
                 already_taken = _extract_assignee(current_description) == actor_label
-                event_line = None if already_taken else f"Taken by: {actor_label} ({_now_label()})"
+                event_line = (
+                    None
+                    if already_taken
+                    else f"Taken by: {actor_label} ({_now_label()})"
+                )
             else:
                 event_line = f"Moved back by {actor_label} ({_now_label()})"
 
@@ -380,7 +432,9 @@ class PlankaCommandService:
                 try:
                     await self._planka.update_card(card_id, description=new_description)
                 except Exception:
-                    logger.exception("Failed to annotate description for card %s", card_id)
+                    logger.exception(
+                        "Failed to annotate description for card %s", card_id
+                    )
 
         return MoveTaskResult(card_id=card_id, card_name=card_name)
 
@@ -395,7 +449,10 @@ class PlankaCommandService:
         downloaded_attachments: list[tuple[PlankaAttachment, bytes]] = []
         if detail.attachments:
             download_results = await asyncio.gather(
-                *[self._planka.download_attachment(att.url) for att in detail.attachments],
+                *[
+                    self._planka.download_attachment(att.url)
+                    for att in detail.attachments
+                ],
                 return_exceptions=True,
             )
             downloaded_attachments = [

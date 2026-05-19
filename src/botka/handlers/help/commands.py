@@ -47,27 +47,42 @@ COMMANDS: list[CommandInfo] = [
         "Polls",
     ),
     CommandInfo(
+        "quest",
+        "show today's quest + active quests, or view a quest by id",
+        "Quests (residents/members)",
+    ),
+    CommandInfo(
         "todo",
-        "list TODO/IN PROGRESS tasks, or show/create a task",
-        "Tasks (residents/members)",
+        "alias for /quest (backward compat)",
+        "Quests (residents/members)",
     ),
     CommandInfo(
         "task",
-        "show full task details by id, or create a task from text",
-        "Tasks (residents/members)",
+        "show full quest details by id, or create a quest from text",
+        "Quests (residents/members)",
     ),
     CommandInfo(
         "attach",
-        "attach a file to task (send file with command or reply to file)",
-        "Tasks (residents/members)",
+        "attach a file to quest (send file with command or reply to file)",
+        "Quests (residents/members)",
     ),
-    CommandInfo("doing", "move task to IN PROGRESS", "Tasks (residents/members)"),
+    CommandInfo(
+        "take", "accept a quest (move to IN PROGRESS)", "Quests (residents/members)"
+    ),
+    CommandInfo(
+        "abandon",
+        "give up a quest (move back to available)",
+        "Quests (residents/members)",
+    ),
+    CommandInfo(
+        "doing", "alias for /take (backward compat)", "Quests (residents/members)"
+    ),
     CommandInfo(
         "done",
-        "move task to DONE, or show recent DONE tasks with no args",
-        "Tasks (residents/members)",
+        "complete a quest, or show recent completed quests with no args",
+        "Quests (residents/members)",
     ),
-    CommandInfo("boards", "list all task boards", "Tasks (residents/members)"),
+    CommandInfo("boards", "list all quest boards", "Quests (residents/members)"),
     CommandInfo("periodic", "list periodic jobs", "Periodic"),
     CommandInfo("periodic_run", "run a periodic job now (residents only)", "Periodic"),
     CommandInfo("ups", "show current UPS / battery status (residents/members)", "UPS"),

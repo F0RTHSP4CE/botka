@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     planka_board_id: str | None = None
     planka_board_name: str = "TASKS"
     planka_poll_interval_seconds: float = 5.0
+    planka_notify_new_quests: bool = True
+    planka_show_card_links: bool = True
     shopping_chat_id: int | None = None
     shopping_topic_id: int | None = None
     borrowed_chat_id: int | None = None
