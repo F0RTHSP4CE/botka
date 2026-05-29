@@ -69,7 +69,7 @@ async def fridge_charge_callback(
         return
 
     charge_line = ""
-    if result.amount is not None and result.currency:
+    if result.charged and result.amount is not None and result.currency:
         charge_line = f"\nCharged: {result.amount} {result.currency}"
 
     if result.ok:
@@ -85,8 +85,13 @@ async def fridge_charge_callback(
             await callback.message.edit_text(text, reply_markup=None)
         await callback.answer("Fridge opened!")
     else:
-        error_detail = f": {result.error}" if result.error else ""
-        text = f"❌ Fridge charge failed{error_detail}.{charge_line}"
+        error_parts = []
+        if result.error_code is not None:
+            error_parts.append(str(result.error_code))
+        if result.error is not None:
+            error_parts.append(str(result.error))
+        error_detail = ": " + ", ".join(error_parts) if error_parts else ""
+        text = f"❌ Fridge charge failed{error_detail}."
         if callback.message is not None:
             await callback.message.edit_text(text, reply_markup=None)
         await callback.answer("Charge failed.", show_alert=True)

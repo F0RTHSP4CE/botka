@@ -21,6 +21,7 @@ class ChargeResult:
     currency: str | None = None
     balance_completed: float | None = None
     balance_draft: float | None = None
+    error_code: int | str | None = None
     error: str | None = None
 
 
@@ -63,5 +64,6 @@ class FridgeClient:
                 currency=body.get("currency"),
                 balance_completed=body.get("balance_completed"),
                 balance_draft=body.get("balance_draft"),
+                error_code=body.get("error_code"),
                 error=body.get("error"),
             )
