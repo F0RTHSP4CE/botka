@@ -145,7 +145,7 @@ async def _handle_agenda_add(
     text = _extract_topic_text(message, command)
     if not text:
         if command is not None:
-        await _list_topics(message, meeting_service, settings)
+            await _list_topics(message, meeting_service, settings)
         return
     topic = await meeting_service.add_topic(
         user_record.id, message.chat.id, message.message_id, text
