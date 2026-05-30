@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
@@ -19,6 +21,27 @@ from botka.services.meeting_service import MeetingService
 router = Router(name=__name__)
 
 _HASHTAG_RE = re.compile(r"^#(?:agenda|агенда)\b\s*", re.IGNORECASE)
+
+
+_DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _agenda_since(settings: Settings) -> datetime:
+    """Return the most recent agenda-notification cutoff in the configured timezone."""
+    tz_name = settings.timezone or os.environ.get("TZ")
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+    target_weekday = _DAY_NAMES.index(settings.meeting_agenda_day.lower())
+    now = datetime.now(tz)
+    days_since = (now.weekday() - target_weekday) % 7
+    cutoff = now.replace(
+        hour=settings.meeting_agenda_hour, minute=0, second=0, microsecond=0
+    ) - timedelta(days=days_since)
+    if cutoff > now:
+        cutoff -= timedelta(days=7)
+    return cutoff
 
 
 def _extract_first_line(text: str) -> str:
@@ -85,8 +108,9 @@ def _extract_topic_text(message: Message, command: CommandObject | None) -> str 
 async def _list_topics(
     message: Message,
     meeting_service: MeetingService,
+    settings: Settings,
 ) -> None:
-    since = datetime.now(timezone.utc) - timedelta(days=7)
+    since = _agenda_since(settings)
     topics = await meeting_service.get_topics_since(since)
     if not topics:
         await message.reply("No agenda topics this week.")
@@ -121,7 +145,7 @@ async def _handle_agenda_add(
     text = _extract_topic_text(message, command)
     if not text:
         if command is not None:
-            await _list_topics(message, meeting_service)
+        await _list_topics(message, meeting_service, settings)
         return
     topic = await meeting_service.add_topic(
         user_record.id, message.chat.id, message.message_id, text
@@ -273,6 +297,7 @@ async def cancel_reply_handler(
 @inject
 async def menu_agenda_message(
     message: Message,
+    settings: FromDishka[Settings],
     meeting_service: FromDishka[MeetingService],
 ) -> None:
-    await _list_topics(message, meeting_service)
+    await _list_topics(message, meeting_service, settings)

@@ -46,9 +46,9 @@ def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
             PeriodicJob(
                 name="meeting_agenda",
                 handler=send_meeting_agenda,
-                cron_hour=18,
+                cron_hour=settings.meeting_agenda_hour,
                 cron_minute=0,
-                cron_day_of_week="tue",
+                cron_day_of_week=settings.meeting_agenda_day,
             )
         )
     ups_interval = settings.ups_check_interval_seconds

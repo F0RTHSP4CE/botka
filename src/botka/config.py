@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     decisions_topic_id: int | None = None
     meeting_chat_id: int | None = None
     meeting_topic_id: int | None = None
+    meeting_agenda_day: str = "tue"
+    meeting_agenda_hour: int = 18
     heartbeat_chat_id: int | None = None
     heartbeat_topic_id: int | None = None
     good_morning_chat_id: int | None = None
