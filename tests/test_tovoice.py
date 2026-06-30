@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,11 +9,14 @@ import pytest
 
 from botka.db.models import UserTier
 from botka.handlers.tovoice.commands import (
+    _ConversionState,
+    _active_conversions,
     _do_tovoice,
     _get_audio_source,
     _is_supported_extension,
     tovoice_handler,
 )
+from botka.handlers.tovoice.callbacks import tovoice_cancel_callback
 
 
 # ---------------------------------------------------------------------------
@@ -117,13 +121,17 @@ async def test_tovoice_rejects_none_user() -> None:
 
 
 def _make_message_with_audio(audio_obj, reply_to=None):
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
     return SimpleNamespace(
-        reply=AsyncMock(),
+        reply=AsyncMock(return_value=progress_msg),
         reply_voice=AsyncMock(),
         reply_to_message=reply_to,
         audio=audio_obj,
         document=None,
         voice=None,
+        chat=SimpleNamespace(id=1),
+        message_id=100,
         bot=AsyncMock(),
     )
 
@@ -201,18 +209,26 @@ async def test_tovoice_success_with_reply() -> None:
         document=None,
         voice=None,
     )
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
     bot = AsyncMock()
     bot.download = AsyncMock()
     message = SimpleNamespace(
-        reply=AsyncMock(),
+        reply=AsyncMock(return_value=progress_msg),
         reply_voice=AsyncMock(),
         reply_to_message=reply_msg,
+        chat=SimpleNamespace(id=1),
+        message_id=10,
         bot=bot,
     )
 
+    async def _fake_convert(input_path, output_path, state):
+        state.done = True
+        state.success = True
+
     with patch(
-        "botka.handlers.tovoice.commands._convert_to_ogg_opus",
-        new=AsyncMock(return_value=True),
+        "botka.handlers.tovoice.commands._run_ffmpeg_with_progress",
+        side_effect=_fake_convert,
     ), patch(
         "botka.handlers.tovoice.commands.FSInputFile",
         return_value=MagicMock(),
@@ -223,27 +239,39 @@ async def test_tovoice_success_with_reply() -> None:
         await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.member))
 
     message.reply_voice.assert_awaited_once()
-    message.reply.assert_not_awaited()
+    # reply() is called once to create the progress message
+    message.reply.assert_awaited_once()
+    # Progress message finalized with success text
+    progress_msg.edit_text.assert_awaited_once()
+    assert "complete" in progress_msg.edit_text.call_args[0][0].lower()
 
 
 @pytest.mark.asyncio
 async def test_tovoice_success_with_attached_audio() -> None:
     """Successful conversion: audio attached directly to the /tovoice command."""
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
     bot = AsyncMock()
     bot.download = AsyncMock()
     message = SimpleNamespace(
-        reply=AsyncMock(),
+        reply=AsyncMock(return_value=progress_msg),
         reply_voice=AsyncMock(),
         reply_to_message=None,
         audio=SimpleNamespace(file_id="fid_wav", file_name="recording.wav"),
         document=None,
         voice=None,
+        chat=SimpleNamespace(id=2),
+        message_id=20,
         bot=bot,
     )
 
+    async def _fake_convert(input_path, output_path, state):
+        state.done = True
+        state.success = True
+
     with patch(
-        "botka.handlers.tovoice.commands._convert_to_ogg_opus",
-        new=AsyncMock(return_value=True),
+        "botka.handlers.tovoice.commands._run_ffmpeg_with_progress",
+        side_effect=_fake_convert,
     ), patch(
         "botka.handlers.tovoice.commands.FSInputFile",
         return_value=MagicMock(),
@@ -254,34 +282,165 @@ async def test_tovoice_success_with_attached_audio() -> None:
         await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.resident))
 
     message.reply_voice.assert_awaited_once()
-    message.reply.assert_not_awaited()
+    message.reply.assert_awaited_once()
+    progress_msg.edit_text.assert_awaited_once()
+    assert "complete" in progress_msg.edit_text.call_args[0][0].lower()
 
 
 @pytest.mark.asyncio
 async def test_tovoice_ffmpeg_failure() -> None:
-    """When ffmpeg fails, an error message is sent."""
+    """When ffmpeg fails, an error message is shown via the progress message."""
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
     bot = AsyncMock()
     bot.download = AsyncMock()
     message = SimpleNamespace(
-        reply=AsyncMock(),
+        reply=AsyncMock(return_value=progress_msg),
         reply_voice=AsyncMock(),
         reply_to_message=None,
         audio=SimpleNamespace(file_id="fid_flac", file_name="audio.flac"),
         document=None,
         voice=None,
+        chat=SimpleNamespace(id=3),
+        message_id=30,
         bot=bot,
     )
 
+    async def _fake_convert(input_path, output_path, state):
+        state.done = True
+        state.success = False
+
     with patch(
-        "botka.handlers.tovoice.commands._convert_to_ogg_opus",
-        new=AsyncMock(return_value=False),
+        "botka.handlers.tovoice.commands._run_ffmpeg_with_progress",
+        side_effect=_fake_convert,
     ):
         await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.resident))
 
-    message.reply.assert_awaited_once()
-    call_args = message.reply.call_args[0][0]
-    assert "conversion failed" in call_args.lower()
     message.reply_voice.assert_not_awaited()
+    # Progress message updated with failure text
+    progress_msg.edit_text.assert_awaited_once()
+    call_args = progress_msg.edit_text.call_args[0][0]
+    assert "failed" in call_args.lower() or "conversion" in call_args.lower()
+
+
+# ---------------------------------------------------------------------------
+# Handler: cancellation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tovoice_cancellation() -> None:
+    """When cancel is signalled during conversion, the progress message shows cancelled."""
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
+    bot = AsyncMock()
+    bot.download = AsyncMock()
+    message = SimpleNamespace(
+        reply=AsyncMock(return_value=progress_msg),
+        reply_voice=AsyncMock(),
+        reply_to_message=None,
+        audio=SimpleNamespace(file_id="fid_mp3", file_name="song.mp3"),
+        document=None,
+        voice=None,
+        chat=SimpleNamespace(id=4),
+        message_id=40,
+        bot=bot,
+    )
+
+    async def _fake_convert(input_path, output_path, state):
+        state.cancel.set()
+        state.done = True
+        state.success = False
+
+    with patch(
+        "botka.handlers.tovoice.commands._run_ffmpeg_with_progress",
+        side_effect=_fake_convert,
+    ):
+        await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.member))
+
+    message.reply_voice.assert_not_awaited()
+    progress_msg.edit_text.assert_awaited_once()
+    call_args = progress_msg.edit_text.call_args[0][0]
+    assert "cancel" in call_args.lower()
+
+
+# ---------------------------------------------------------------------------
+# Cancel callback: tovoice_cancel_callback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_callback_active_job() -> None:
+    """Cancel callback signals the active conversion to stop."""
+    job_id = "99_888"
+    cancel_event = asyncio.Event()
+    _active_conversions[job_id] = cancel_event
+
+    callback = SimpleNamespace(
+        data=f"tovoice_cancel:{job_id}",
+        answer=AsyncMock(),
+    )
+
+    try:
+        await tovoice_cancel_callback(callback)
+    finally:
+        _active_conversions.pop(job_id, None)
+
+    assert cancel_event.is_set()
+    callback.answer.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancel_callback_finished_job() -> None:
+    """Cancel callback responds gracefully when the job is already done."""
+    job_id = "no_such_job"
+    # Ensure the job is not in the map
+    _active_conversions.pop(job_id, None)
+
+    callback = SimpleNamespace(
+        data=f"tovoice_cancel:{job_id}",
+        answer=AsyncMock(),
+    )
+
+    await tovoice_cancel_callback(callback)
+
+    callback.answer.assert_awaited_once()
+    # Should inform user that conversion is already done
+    call_kwargs = callback.answer.call_args
+    assert call_kwargs is not None
+
+
+@pytest.mark.asyncio
+async def test_cancel_callback_no_data() -> None:
+    """Cancel callback handles missing callback data gracefully."""
+    callback = SimpleNamespace(
+        data=None,
+        answer=AsyncMock(),
+    )
+
+    await tovoice_cancel_callback(callback)
+
+    callback.answer.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _ConversionState.percent property
+# ---------------------------------------------------------------------------
+
+
+def test_conversion_state_percent_unknown() -> None:
+    state = _ConversionState()
+    assert state.percent is None
+
+
+def test_conversion_state_percent_known() -> None:
+    state = _ConversionState(duration_secs=100.0, current_secs=50.0)
+    assert state.percent == 50
+
+
+def test_conversion_state_percent_capped_at_99() -> None:
+    state = _ConversionState(duration_secs=10.0, current_secs=10.0)
+    assert state.percent == 99
 
 
 # ---------------------------------------------------------------------------

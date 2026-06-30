@@ -1,3 +1,3 @@
-from botka.handlers.tovoice import commands
+from botka.handlers.tovoice import callbacks, commands
 
-__all__ = ["commands"]
+__all__ = ["callbacks", "commands"]
