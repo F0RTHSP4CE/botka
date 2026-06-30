@@ -2,6 +2,7 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 RUN apt update && apt install -y --no-install-recommends \
 	sqlite3 \
+	ffmpeg \
 	&& rm -rf /var/lib/apt/lists/*
 
 # Enable BuildKit cache mounts for uv

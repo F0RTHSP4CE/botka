@@ -125,6 +125,11 @@ COMMANDS: list[CommandInfo] = [
         "show Bambu Lab printer statuses and camera (residents/members)",
         "Printers",
     ),
+    CommandInfo(
+        "tovoice",
+        "convert an audio file to a voice message (residents/members)",
+        "Audio",
+    ),
 ]
 
 
