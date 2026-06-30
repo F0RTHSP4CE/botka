@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
+import re
 import tempfile
 from pathlib import Path
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import FSInputFile, Message
+from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from botka.db.models import User, UserTier
 
@@ -16,6 +19,17 @@ logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 
 SUPPORTED_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".aiff", ".aif"})
+
+# How often (seconds) the progress message is updated while conversion runs.
+_PROGRESS_INTERVAL: float = 5.0
+
+# Regex patterns for parsing ffmpeg stderr output.
+_RE_DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)")
+_RE_TIME = re.compile(r"time=\s*(\d+):(\d+):(\d+\.?\d*)")
+
+# Map of job_id -> asyncio.Event used to signal cancellation.
+# Populated while a conversion is in progress; removed when it finishes.
+_active_conversions: dict[str, asyncio.Event] = {}
 
 
 def _get_audio_source(message: Message) -> tuple[str, str | None] | None:
@@ -40,10 +54,48 @@ def _is_supported_extension(file_name: str | None) -> bool:
     return Path(file_name).suffix.lower() in SUPPORTED_EXTENSIONS
 
 
-async def _convert_to_ogg_opus(input_path: Path, output_path: Path) -> bool:
-    """Convert *input_path* to OGG OPUS at *output_path* via ffmpeg.
+def _cancel_keyboard(job_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Cancel", callback_data=f"tovoice_cancel:{job_id}")]
+        ]
+    )
 
-    Returns True on success.
+
+async def _safe_edit(msg: Message, text: str, **kwargs: object) -> None:
+    """Edit *msg* text, silently ignoring Telegram errors."""
+    try:
+        await msg.edit_text(text, **kwargs)  # type: ignore[arg-type]
+    except TelegramBadRequest:
+        pass
+    except Exception:
+        logger.debug("Could not edit progress message", exc_info=True)
+
+
+@dataclasses.dataclass
+class _ConversionState:
+    cancel: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
+    duration_secs: float | None = None
+    current_secs: float = 0.0
+    done: bool = False
+    success: bool = False
+
+    @property
+    def percent(self) -> int | None:
+        if self.duration_secs and self.duration_secs > 0:
+            return min(99, int(100 * self.current_secs / self.duration_secs))
+        return None
+
+
+async def _run_ffmpeg_with_progress(
+    input_path: Path,
+    output_path: Path,
+    state: _ConversionState,
+) -> None:
+    """Run ffmpeg and update *state* with real-time progress.
+
+    Sets ``state.done = True`` and ``state.success`` when finished.
+    Kills the process when ``state.cancel`` is set.
     """
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg",
@@ -61,15 +113,56 @@ async def _convert_to_ogg_opus(input_path: Path, output_path: Path) -> bool:
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr_data = await proc.communicate()
+
+    assert proc.stderr is not None
+    stderr_buf = bytearray()
+
+    async def _read_stderr() -> None:
+        while True:
+            chunk = await proc.stderr.read(512)  # type: ignore[union-attr]
+            if not chunk:
+                break
+            stderr_buf.extend(chunk)
+            text = chunk.decode(errors="replace")
+            if state.duration_secs is None:
+                m = _RE_DURATION.search(stderr_buf.decode(errors="replace"))
+                if m:
+                    h, mn, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                    state.duration_secs = h * 3600 + mn * 60 + s
+            for m in _RE_TIME.finditer(text):
+                h, mn, s = int(m.group(1)), int(m.group(2)), float(m.group(3))
+                state.current_secs = h * 3600 + mn * 60 + s
+
+    async def _watch_cancel() -> None:
+        await state.cancel.wait()
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+    read_task = asyncio.create_task(_read_stderr())
+    cancel_task = asyncio.create_task(_watch_cancel())
+    try:
+        await proc.wait()
+    finally:
+        read_task.cancel()
+        cancel_task.cancel()
+        await asyncio.gather(read_task, cancel_task, return_exceptions=True)
+
+    state.done = True
+    if state.cancel.is_set():
+        state.success = False
+        return
+
     if proc.returncode != 0:
         logger.warning(
             "ffmpeg conversion failed (exit %d): %s",
             proc.returncode,
-            stderr_data.decode(errors="replace").strip(),
+            stderr_buf.decode(errors="replace").strip(),
         )
-        return False
-    return True
+        state.success = False
+    else:
+        state.success = True
 
 
 async def _do_tovoice(message: Message, user_record: User | None) -> None:
@@ -101,20 +194,68 @@ async def _do_tovoice(message: Message, user_record: User | None) -> None:
         )
         return
 
-    with tempfile.TemporaryDirectory() as tmp:
-        suffix = Path(file_name).suffix.lower() if file_name else ".audio"
-        input_path = Path(tmp) / f"input{suffix}"
-        output_path = Path(tmp) / "output.ogg"
+    job_id = f"{message.chat.id}_{message.message_id}"
+    cancel_event = asyncio.Event()
+    _active_conversions[job_id] = cancel_event
 
-        await message.bot.download(file_id, destination=str(input_path))
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            suffix = Path(file_name).suffix.lower() if file_name else ".audio"
+            input_path = Path(tmp) / f"input{suffix}"
+            output_path = Path(tmp) / "output.ogg"
 
-        success = await _convert_to_ogg_opus(input_path, output_path)
-        if not success or not output_path.exists():
-            await message.reply("Audio conversion failed. Is ffmpeg installed?")
-            return
+            await message.bot.download(file_id, destination=str(input_path))
 
-        voice_file = FSInputFile(str(output_path), filename="voice.ogg")
-        await message.reply_voice(voice=voice_file)
+            progress_msg = await message.reply(
+                "⏳ Converting…",
+                reply_markup=_cancel_keyboard(job_id),
+            )
+
+            state = _ConversionState(cancel=cancel_event)
+            conv_task = asyncio.create_task(
+                _run_ffmpeg_with_progress(input_path, output_path, state)
+            )
+
+            async def _update_loop() -> None:
+                try:
+                    while True:
+                        await asyncio.sleep(_PROGRESS_INTERVAL)
+                        if state.done:
+                            return
+                        pct = state.percent
+                        status = (
+                            f"⏳ Converting… {pct}%"
+                            if pct is not None
+                            else "⏳ Converting…"
+                        )
+                        await _safe_edit(
+                            progress_msg, status, reply_markup=_cancel_keyboard(job_id)
+                        )
+                except asyncio.CancelledError:
+                    return
+
+            update_task = asyncio.create_task(_update_loop())
+            try:
+                await conv_task
+            finally:
+                update_task.cancel()
+                await asyncio.gather(update_task, return_exceptions=True)
+
+            if cancel_event.is_set():
+                await _safe_edit(progress_msg, "❌ Conversion cancelled.")
+                return
+
+            if not state.success or not output_path.exists():
+                await _safe_edit(
+                    progress_msg, "❌ Conversion failed. Is ffmpeg installed?"
+                )
+                return
+
+            voice_file = FSInputFile(str(output_path), filename="voice.ogg")
+            await message.reply_voice(voice=voice_file)
+            await _safe_edit(progress_msg, "✅ Conversion complete.")
+    finally:
+        _active_conversions.pop(job_id, None)
 
 
 @router.message(Command("tovoice"))
