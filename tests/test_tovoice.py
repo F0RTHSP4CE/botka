@@ -321,7 +321,7 @@ async def test_tovoice_ffmpeg_failure() -> None:
     # edit_text called twice: "⏳ Converting…" after download, then failure message
     assert progress_msg.edit_text.await_count == 2
     call_args = progress_msg.edit_text.call_args[0][0]
-    assert "failed" in call_args.lower() or "conversion" in call_args.lower()
+    assert "Conversion failed" in call_args
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ async def test_tovoice_download_failure() -> None:
     # Only one edit_text call: the download failure message
     progress_msg.edit_text.assert_awaited_once()
     call_args = progress_msg.edit_text.call_args[0][0]
-    assert "failed" in call_args.lower() or "download" in call_args.lower()
+    assert "Failed to download the file" in call_args
 
 
 # ---------------------------------------------------------------------------
