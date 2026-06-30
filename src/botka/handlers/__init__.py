@@ -11,6 +11,7 @@ __all__ = [
     "planka",
     "refinance",
     "shopping",
+    "tovoice",
     "ups",
     "users",
 ]
