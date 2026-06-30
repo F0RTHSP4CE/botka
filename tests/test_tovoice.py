@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -286,9 +287,6 @@ async def test_tovoice_ffmpeg_failure() -> None:
 # ---------------------------------------------------------------------------
 # Decorated handler: sanity check
 # ---------------------------------------------------------------------------
-
-
-import inspect
 
 
 def test_tovoice_handler_is_coroutine() -> None:

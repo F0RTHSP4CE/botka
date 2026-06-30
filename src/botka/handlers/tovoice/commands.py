@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from aiogram.filters import Command
 from aiogram.types import FSInputFile, Message
 
 from botka.db.models import User, UserTier
+
+logger = logging.getLogger(__name__)
 
 router = Router(name=__name__)
 
@@ -56,10 +59,17 @@ async def _convert_to_ogg_opus(input_path: Path, output_path: Path) -> bool:
         "48000",
         str(output_path),
         stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
     )
-    await proc.wait()
-    return proc.returncode == 0
+    _, stderr_data = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(
+            "ffmpeg conversion failed (exit %d): %s",
+            proc.returncode,
+            stderr_data.decode(errors="replace").strip(),
+        )
+        return False
+    return True
 
 
 async def _do_tovoice(message: Message, user_record: User | None) -> None:
