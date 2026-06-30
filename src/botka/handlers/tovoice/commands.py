@@ -199,16 +199,25 @@ async def _do_tovoice(message: Message, user_record: User | None) -> None:
     _active_conversions[job_id] = cancel_event
 
     try:
+        progress_msg = await message.reply(
+            "⏳ Downloading…",
+            reply_markup=_cancel_keyboard(job_id),
+        )
+
         with tempfile.TemporaryDirectory() as tmp:
             suffix = Path(file_name).suffix.lower() if file_name else ".audio"
             input_path = Path(tmp) / f"input{suffix}"
             output_path = Path(tmp) / "output.ogg"
 
-            await message.bot.download(file_id, destination=str(input_path))
+            try:
+                await message.bot.download(file_id, destination=str(input_path))
+            except Exception as exc:
+                logger.warning("Failed to download file %s: %s", file_id, exc)
+                await _safe_edit(progress_msg, "❌ Failed to download the file.")
+                return
 
-            progress_msg = await message.reply(
-                "⏳ Converting…",
-                reply_markup=_cancel_keyboard(job_id),
+            await _safe_edit(
+                progress_msg, "⏳ Converting…", reply_markup=_cancel_keyboard(job_id)
             )
 
             state = _ConversionState(cancel=cancel_event)

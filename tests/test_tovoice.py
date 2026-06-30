@@ -241,8 +241,8 @@ async def test_tovoice_success_with_reply() -> None:
     message.reply_voice.assert_awaited_once()
     # reply() is called once to create the progress message
     message.reply.assert_awaited_once()
-    # Progress message finalized with success text
-    progress_msg.edit_text.assert_awaited_once()
+    # edit_text called twice: "⏳ Converting…" after download, then "✅ Conversion complete."
+    assert progress_msg.edit_text.await_count == 2
     assert "complete" in progress_msg.edit_text.call_args[0][0].lower()
 
 
@@ -283,7 +283,8 @@ async def test_tovoice_success_with_attached_audio() -> None:
 
     message.reply_voice.assert_awaited_once()
     message.reply.assert_awaited_once()
-    progress_msg.edit_text.assert_awaited_once()
+    # edit_text called twice: "⏳ Converting…" after download, then "✅ Conversion complete."
+    assert progress_msg.edit_text.await_count == 2
     assert "complete" in progress_msg.edit_text.call_args[0][0].lower()
 
 
@@ -317,10 +318,47 @@ async def test_tovoice_ffmpeg_failure() -> None:
         await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.resident))
 
     message.reply_voice.assert_not_awaited()
-    # Progress message updated with failure text
-    progress_msg.edit_text.assert_awaited_once()
+    # edit_text called twice: "⏳ Converting…" after download, then failure message
+    assert progress_msg.edit_text.await_count == 2
     call_args = progress_msg.edit_text.call_args[0][0]
     assert "failed" in call_args.lower() or "conversion" in call_args.lower()
+
+
+# ---------------------------------------------------------------------------
+# Handler: download failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tovoice_download_failure() -> None:
+    """When the download fails, an error is shown and no conversion is attempted."""
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
+    bot = AsyncMock()
+    bot.download = AsyncMock(side_effect=Exception("Network error"))
+    message = SimpleNamespace(
+        reply=AsyncMock(return_value=progress_msg),
+        reply_voice=AsyncMock(),
+        reply_to_message=None,
+        audio=SimpleNamespace(file_id="fid_mp3", file_name="song.mp3"),
+        document=None,
+        voice=None,
+        chat=SimpleNamespace(id=5),
+        message_id=50,
+        bot=bot,
+    )
+
+    with patch(
+        "botka.handlers.tovoice.commands._run_ffmpeg_with_progress",
+    ) as mock_ffmpeg:
+        await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.member))
+
+    mock_ffmpeg.assert_not_called()
+    message.reply_voice.assert_not_awaited()
+    # Only one edit_text call: the download failure message
+    progress_msg.edit_text.assert_awaited_once()
+    call_args = progress_msg.edit_text.call_args[0][0]
+    assert "failed" in call_args.lower() or "download" in call_args.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +397,8 @@ async def test_tovoice_cancellation() -> None:
         await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.member))
 
     message.reply_voice.assert_not_awaited()
-    progress_msg.edit_text.assert_awaited_once()
+    # edit_text called twice: "⏳ Converting…" after download, then cancellation message
+    assert progress_msg.edit_text.await_count == 2
     call_args = progress_msg.edit_text.call_args[0][0]
     assert "cancel" in call_args.lower()
 
