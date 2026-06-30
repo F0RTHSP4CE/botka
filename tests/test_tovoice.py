@@ -364,6 +364,52 @@ async def test_tovoice_cancellation() -> None:
     assert "cancel" in call_args.lower()
 
 
+@pytest.mark.asyncio
+async def test_tovoice_progress_update_during_conversion() -> None:
+    """edit_text is called during conversion (update loop fires) and on success."""
+    progress_msg = AsyncMock()
+    progress_msg.edit_text = AsyncMock()
+    bot = AsyncMock()
+    bot.download = AsyncMock()
+    message = SimpleNamespace(
+        reply=AsyncMock(return_value=progress_msg),
+        reply_voice=AsyncMock(),
+        reply_to_message=None,
+        audio=SimpleNamespace(file_id="fid_mp3", file_name="song.mp3"),
+        document=None,
+        voice=None,
+        chat=SimpleNamespace(id=5),
+        message_id=50,
+        bot=bot,
+    )
+
+    async def _slow_convert(input_path, output_path, state):
+        # Pause so the progress update loop can fire at least once.
+        await asyncio.sleep(0.05)
+        state.done = True
+        state.success = True
+
+    with patch(
+        "botka.handlers.tovoice.commands._run_ffmpeg_with_progress",
+        side_effect=_slow_convert,
+    ), patch(
+        "botka.handlers.tovoice.commands._PROGRESS_INTERVAL",
+        0.01,
+    ), patch(
+        "botka.handlers.tovoice.commands.FSInputFile",
+        return_value=MagicMock(),
+    ), patch(
+        "pathlib.Path.exists",
+        return_value=True,
+    ):
+        await _do_tovoice(message, user_record=SimpleNamespace(tier=UserTier.resident))
+
+    message.reply_voice.assert_awaited_once()
+    # edit_text should be called during conversion (≥1 progress update)
+    # plus once for the final "✅ Conversion complete." message.
+    assert progress_msg.edit_text.await_count >= 2
+
+
 # ---------------------------------------------------------------------------
 # Cancel callback: tovoice_cancel_callback
 # ---------------------------------------------------------------------------
