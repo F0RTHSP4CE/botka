@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from botka.config import Settings
 from botka.periodic.jobs import (
     PeriodicJob,
+    notify_refinance_invoices,
     poll_maintenance,
     send_good_morning,
     send_heartbeat,
@@ -31,6 +32,20 @@ def build_schedule(settings: Settings) -> Sequence[PeriodicJob]:
                 name="poll_maintenance",
                 handler=poll_maintenance,
                 interval_seconds=poll_interval,
+            )
+        )
+    refinance_interval = settings.refinance_invoice_poll_seconds
+    if (
+        refinance_interval > 0
+        and settings.refinance_api_url
+        and settings.refinance_secret_key
+        and settings.refinance_bot_entity_id
+    ):
+        jobs.append(
+            PeriodicJob(
+                name="refinance_invoice_notifications",
+                handler=notify_refinance_invoices,
+                interval_seconds=refinance_interval,
             )
         )
     jobs.append(

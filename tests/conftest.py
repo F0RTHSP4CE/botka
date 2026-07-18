@@ -28,6 +28,7 @@ async def session(engine) -> AsyncSession:
 @pytest.fixture()
 def settings() -> Settings:
     return Settings(
+        _env_file=None,
         bot_token="test",
         database_url="sqlite+aiosqlite:///:memory:",
         shopping_topic_id=42,

@@ -15,15 +15,12 @@ from botka.handlers.refinance.commands import (
     _do_transfer_draft,
     _parse_amount_currency,
 )
+from botka.handlers.refinance.dialogs import DepositDialog, start_deposit_dialog
 from botka.services.refinance_client import RefinanceClient
 from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 router.message.filter(F.chat.type == "private")
-
-
-class DepositDialog(StatesGroup):
-    waiting_amount = State()
 
 
 class TransferDialog(StatesGroup):
@@ -40,11 +37,7 @@ async def menu_deposit_start(
     message: Message,
     state: FSMContext,
 ) -> None:
-    await state.set_state(DepositDialog.waiting_amount)
-    await message.reply(
-        "Enter the amount and currency to deposit, e.g. <code>10 GEL</code>:",
-        reply_markup=cancel_kb(),
-    )
+    await start_deposit_dialog(message, state)
 
 
 @router.message(DepositDialog.waiting_amount, F.text != Btn.CANCEL)

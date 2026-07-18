@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     refinance_api_url: str | None = None
     refinance_secret_key: str | None = None
     refinance_bot_entity_id: int | None = None
+    refinance_invoice_poll_seconds: int = 600
 
     def get_bambu_printer_configs(self) -> list[dict]:
         """Parse BOTKA_BAMBU_PRINTERS JSON into a list of printer config dicts."""

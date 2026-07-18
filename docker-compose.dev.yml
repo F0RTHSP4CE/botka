@@ -1,0 +1,11 @@
+services:
+  bot:
+    # Refinance runs in a separate Compose project and publishes its API on
+    # the host. These values intentionally override production-like entries
+    # from .env when the dev override is selected.
+    environment:
+      BOTKA_REFINANCE_API_URL: ${BOTKA_DEV_REFINANCE_API_URL:-http://host.docker.internal:8000}
+      BOTKA_REFINANCE_SECRET_KEY: ${BOTKA_DEV_REFINANCE_SECRET_KEY:-0000-1111-2222-3333-4444-5555}
+    extra_hosts:
+      # Required on Linux; harmless on Docker Desktop.
+      - "host.docker.internal:host-gateway"

@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import html
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.handlers.menu import Btn, send_main_menu
+from botka.handlers.refinance.dialogs import start_deposit_dialog
+from botka.handlers.refinance.invoice_ui import build_payment_view
 from botka.services.refinance_client import RefinanceClient
 from botka.services.user_service import UserService
 
@@ -116,9 +120,26 @@ def _split_args(
     return None, tokens
 
 
-def _format_balance_dict(bal: dict) -> str:
-    parts = [f"{v} {k.upper()}" for k, v in bal.items() if Decimal(str(v)) != 0]
-    return ", ".join(parts) if parts else "0"
+def _format_money(value: object) -> str:
+    return format(Decimal(str(value)), ".2f")
+
+
+def _format_balance_lines(balances: dict) -> list[str]:
+    lines = [
+        f"    {_format_money(value)} {currency.upper()}"
+        for currency, value in balances.items()
+        if Decimal(str(value)) != 0
+    ]
+    return lines or ["    0"]
+
+
+def _billing_period_label(raw_period: object) -> str | None:
+    if not raw_period:
+        return None
+    try:
+        return date.fromisoformat(str(raw_period)[:10]).strftime("%B %Y")
+    except ValueError:
+        return str(raw_period)
 
 
 # ------------------------------------------------------------------ #
@@ -382,12 +403,12 @@ async def request_handler(
 # ------------------------------------------------------------------ #
 
 
-async def _do_balance_for_entity(
-    message: Message,
+async def _build_balance_message(
     refinance: RefinanceClient,
     entity: dict,
+    telegram_id: int,
     viewing_other: bool = False,
-) -> None:
+) -> tuple[str, InlineKeyboardMarkup | None]:
     entity_id = entity["id"]
     try:
         balance, pending_invoices, last_txs = await asyncio.gather(
@@ -396,54 +417,95 @@ async def _do_balance_for_entity(
             refinance.get_transactions(entity_id, limit=1),
         )
     except Exception as exc:
-        await message.reply(f"Error fetching data: {html.escape(str(exc))}")
-        return
+        return html.escape(str(exc)), None
 
     lines: list[str] = []
     if viewing_other:
-        lines.append(f"Balance for <b>{html.escape(entity['name'])}</b>")
+        lines.extend([f"👤 <b>{html.escape(entity['name'])}</b>", ""])
 
     completed = balance.get("completed") or {}
-    bal_str = _format_balance_dict(completed)
-    lines.append(f"💰 <b>Balance:</b> {bal_str}")
+    lines.append("💰 <b>Balance</b>")
+    lines.extend(_format_balance_lines(completed))
 
     draft = balance.get("draft") or {}
-    draft_str = _format_balance_dict(draft)
-    if draft_str != "0":
-        lines.append(f"📋 <b>Draft:</b> {draft_str}")
+    draft_lines = _format_balance_lines(draft)
+    if draft_lines != ["    0"]:
+        lines.extend(["", "📋 <b>Draft balance</b>", *draft_lines])
 
     if pending_invoices:
-        by_currency: dict[str, Decimal] = {}
-        for inv in pending_invoices:
-            for amt in inv.get("amounts", []):
-                cur = amt["currency"].upper()
-                by_currency[cur] = by_currency.get(cur, Decimal(0)) + Decimal(
-                    str(amt["amount"])
+        invoice_count = len(pending_invoices)
+        invoice_heading = (
+            "🧾 <b>Unpaid invoice</b>"
+            if invoice_count == 1
+            else f"🧾 <b>Unpaid invoices · {invoice_count}</b>"
+        )
+        lines.extend(["", invoice_heading])
+        for invoice_index, inv in enumerate(pending_invoices):
+            try:
+                view = build_payment_view(inv)
+                amounts_str = " or ".join(
+                    f"{_format_money(amount)} {currency.upper()}"
+                    for currency, amount in view.totals.items()
                 )
-        inv_sum = " or ".join(f"{v} {k}" for k, v in by_currency.items())
-        lines.append(f"🧾 <b>Unpaid invoices ({len(pending_invoices)}):</b> {inv_sum}")
-        for inv in pending_invoices[:5]:
-            from_name = html.escape((inv.get("from_entity") or {}).get("name", "?"))
-            to_name = html.escape((inv.get("to_entity") or {}).get("name", "?"))
-            amounts_str = " or ".join(
-                f"{a['amount']} {a['currency'].upper()}" for a in inv.get("amounts", [])
-            )
-            lines.append(f"  · #{inv['id']} {from_name} → {to_name}: {amounts_str}")
-        if len(pending_invoices) > 5:
-            lines.append(f"  … and {len(pending_invoices) - 5} more")
+                room_name = view.selected_room_name
+            except ValueError:
+                amounts_str = "Choose a donation room to review the amount"
+                room_name = None
+            period = _billing_period_label(inv.get("billing_period"))
+            invoice_title = f"    <b>#{inv['id']}"
+            if period:
+                invoice_title += f" · {html.escape(period)}"
+            invoice_title += "</b>"
+            if invoice_index > 0:
+                lines.append("")
+            lines.extend([invoice_title, f"    {amounts_str}"])
+            if room_name:
+                lines.append(f"    Donation room: {html.escape(room_name)}")
     else:
-        lines.append("🧾 No unpaid invoices.")
+        lines.extend(["", "🧾 <b>Invoices</b>", "    No unpaid invoices."])
 
     if last_txs:
         tx = last_txs[0]
         from_name = html.escape((tx.get("from_entity") or {}).get("name", "?"))
         to_name = html.escape((tx.get("to_entity") or {}).get("name", "?"))
-        lines.append(
-            f"🔁 <b>Last tx:</b> #{tx['id']} {from_name} → {to_name}: "
-            f"{tx['amount']} {tx['currency'].upper()} [{tx['status']}]"
+        status = str(tx.get("status") or "unknown").replace("_", " ").capitalize()
+        lines.extend(
+            [
+                "",
+                "🔁 <b>Latest transaction</b>",
+                f"    <b>{_format_money(tx['amount'])} {tx['currency'].upper()}</b>",
+                f"    {from_name} → {to_name}",
+                f"    #{tx['id']} · {html.escape(status)}",
+            ]
         )
 
-    await message.reply("\n".join(lines))
+    keyboard = None
+    if not viewing_other and pending_invoices:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"Pay invoice #{invoice['id']}",
+                        callback_data=f"rfi:v:b:{invoice['id']}:0:{telegram_id}",
+                    )
+                ]
+                for invoice in pending_invoices
+            ]
+        )
+    return "\n".join(lines), keyboard
+
+
+async def _do_balance_for_entity(
+    message: Message,
+    refinance: RefinanceClient,
+    entity: dict,
+    viewing_other: bool = False,
+) -> None:
+    telegram_id = message.from_user.id if message.from_user else 0
+    text, keyboard = await _build_balance_message(
+        refinance, entity, telegram_id, viewing_other
+    )
+    await message.reply(text, reply_markup=keyboard)
 
 
 @router.message(Command("balance"))
@@ -652,6 +714,7 @@ async def deposit_handler(
     message: Message,
     command: CommandObject,
     refinance: FromDishka[RefinanceClient],
+    state: FSMContext,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
@@ -660,6 +723,9 @@ async def deposit_handler(
         await message.reply(_NOT_CONFIGURED)
         return
     args = (command.args or "").split()
+    if not args and message.chat.type == "private":
+        await start_deposit_dialog(message, state)
+        return
     if len(args) < 2:
         await message.reply("Usage: <code>/deposit 10 GEL</code>")
         return

@@ -23,6 +23,15 @@ from botka.config import Settings
 logger = logging.getLogger(__name__)
 
 
+class RefinanceAPIError(RuntimeError):
+    """A concise Refinance response suitable for logs and user feedback."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        self.status_code = status_code
+        self.body = body
+        super().__init__(f"HTTP {status_code}: {body}")
+
+
 class RefinanceClient:
     """Long-lived HTTP client for the Refinance API (APP-scoped singleton)."""
 
@@ -60,19 +69,16 @@ class RefinanceClient:
         return self._entity_headers(self._bot_entity_id)
 
     def _raise_for_status(self, r: httpx.Response) -> None:
-        """Like raise_for_status but logs the API error body first."""
+        """Raise without httpx's URL and documentation boilerplate."""
         if r.is_error:
-            try:
-                body = r.json()
-                logger.error(
-                    "Refinance API error %s %s: %s",
-                    r.status_code,
-                    r.request.url,
-                    body.get("error") or body,
-                )
-            except Exception:
-                pass
-            r.raise_for_status()
+            body = r.text.strip() or "<empty response body>"
+            logger.error(
+                "Refinance API error %s %s: %s",
+                r.status_code,
+                r.request.url,
+                body,
+            )
+            raise RefinanceAPIError(r.status_code, body)
 
     async def _get(
         self,
@@ -159,6 +165,34 @@ class RefinanceClient:
         items = (data or {}).get("items", [])
         return items[0] if items else None
 
+    async def get_entity(self, entity_id: int, actor_entity_id: int) -> dict:
+        return await self._get(
+            f"/entities/{entity_id}", self._entity_headers(actor_entity_id)
+        )
+
+    async def get_entities_by_tag(
+        self, actor_entity_id: int, tag_id: int, *, active: bool = True
+    ) -> list[dict]:
+        items: list[dict] = []
+        skip = 0
+        limit = 100
+        while True:
+            data = await self._get(
+                "/entities",
+                self._entity_headers(actor_entity_id),
+                {
+                    "tags_ids": tag_id,
+                    "active": active,
+                    "limit": limit,
+                    "skip": skip,
+                },
+            )
+            page = (data or {}).get("items", [])
+            items.extend(page)
+            if len(page) < limit:
+                return items
+            skip += limit
+
     async def link_telegram_id(self, entity_id: int, telegram_id: int) -> dict:
         """Attach telegram_id to an existing entity (auto-onboarding)."""
         return await self._patch(
@@ -194,6 +228,12 @@ class RefinanceClient:
     async def get_balance(self, entity_id: int) -> dict:
         return await self._get(
             f"/balances/{entity_id}",
+            self._entity_headers(entity_id),
+        )
+
+    async def get_recommended_deposit(self, entity_id: int) -> dict:
+        return await self._get(
+            f"/balances/{entity_id}/recommended-deposit",
             self._entity_headers(entity_id),
         )
 
@@ -274,6 +314,58 @@ class RefinanceClient:
             params,
         )
         return (data or {}).get("items", [])
+
+    async def get_invoice(self, entity_id: int, invoice_id: int) -> dict:
+        return await self._get(
+            f"/invoices/{invoice_id}", self._entity_headers(entity_id)
+        )
+
+    async def get_pending_fee_invoices(self) -> list[dict]:
+        """List every pending fee invoice using the configured bot identity."""
+        items: list[dict] = []
+        skip = 0
+        limit = 100
+        while True:
+            data = await self._get(
+                "/invoices",
+                self._bot_headers(),
+                {
+                    "status": "pending",
+                    "tags_ids": 3,
+                    "limit": limit,
+                    "skip": skip,
+                },
+            )
+            page = (data or {}).get("items", [])
+            items.extend(page)
+            if len(page) < limit:
+                return items
+            skip += limit
+
+    async def pay_simple_invoice(
+        self, entity_id: int, invoice: dict, currency: str, amount: str
+    ) -> dict:
+        return await self._post(
+            "/transactions",
+            self._entity_headers(entity_id),
+            {
+                "from_entity_id": invoice["from_entity_id"],
+                "to_entity_id": invoice["to_entity_id"],
+                "invoice_id": invoice["id"],
+                "currency": currency.lower(),
+                "amount": amount,
+                "status": "completed",
+            },
+        )
+
+    async def pay_invoice_items(
+        self, entity_id: int, invoice_id: int, items: list[dict]
+    ) -> dict:
+        return await self._post(
+            f"/invoices/{invoice_id}/pay-items",
+            self._entity_headers(entity_id),
+            {"items": items},
+        )
 
     # ------------------------------------------------------------------ #
     # Deposits                                                              #

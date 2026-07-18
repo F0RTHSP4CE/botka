@@ -3,6 +3,7 @@ from .good_morning import send_good_morning
 from .heartbeat import send_heartbeat
 from .meeting import send_meeting_agenda
 from .polls import poll_maintenance
+from .refinance_invoices import notify_refinance_invoices
 from .ups import ups_discharge_report
 
 __all__ = [
@@ -12,5 +13,6 @@ __all__ = [
     "send_heartbeat",
     "send_meeting_agenda",
     "poll_maintenance",
+    "notify_refinance_invoices",
     "ups_discharge_report",
 ]
