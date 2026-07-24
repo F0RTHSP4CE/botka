@@ -131,9 +131,12 @@ class AppProvider(Provider):
         self, settings: Settings
     ) -> AsyncIterable[RefinanceClient]:
         client = RefinanceClient(settings)
-        if client.is_configured:
-            await client.verify_bot_entity()
-        yield client
+        try:
+            if client.is_configured:
+                await client.verify_bot_entity()
+            yield client
+        finally:
+            await client.close()
 
     @provide(scope=Scope.APP)
     def planka_album_tracker(self) -> PlankaAlbumTracker:

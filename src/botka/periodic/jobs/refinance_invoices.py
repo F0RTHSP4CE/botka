@@ -34,55 +34,61 @@ def _is_new_invoice(invoice: dict, poll_seconds: int) -> bool:
 async def notify_refinance_invoices(context: PeriodicContext) -> None:
     client = RefinanceClient(context.settings)
     if not client.is_configured:
+        await client.close()
         return
     try:
-        invoices = await client.get_pending_fee_invoices()
-    except Exception:
-        logger.exception("Failed to poll pending refinance invoices")
-        return
+        try:
+            invoices = await client.get_pending_fee_invoices()
+        except Exception:
+            logger.exception("Failed to poll pending refinance invoices")
+            return
 
-    async with context.sessionmaker() as session:
-        receipts = InvoiceNotificationService(session)
-        local_telegram_ids = set(
-            (await session.scalars(select(User.telegram_id))).all()
-        )
-        for invoice in invoices:
-            invoice_id = int(invoice["id"])
-            if await receipts.was_notified(invoice_id):
-                continue
-            raw_telegram_id = (
-                (invoice.get("from_entity") or {}).get("auth") or {}
-            ).get("telegram_id")
-            try:
-                telegram_id = int(raw_telegram_id)
-            except (TypeError, ValueError):
-                logger.warning("Invoice %s payer has no valid Telegram ID", invoice_id)
-                continue
-            if telegram_id not in local_telegram_ids:
-                logger.info(
-                    "Skipping invoice %s notification: Telegram user %s is not in Botka",
-                    invoice_id,
-                    telegram_id,
-                )
-                continue
-            try:
-                sent = await context.bot.send_message(
-                    chat_id=telegram_id,
-                    text=format_notification(
-                        invoice,
-                        is_new=_is_new_invoice(
+        async with context.sessionmaker() as session:
+            receipts = InvoiceNotificationService(session)
+            local_telegram_ids = set(
+                (await session.scalars(select(User.telegram_id))).all()
+            )
+            for invoice in invoices:
+                invoice_id = int(invoice["id"])
+                if await receipts.was_notified(invoice_id):
+                    continue
+                raw_telegram_id = (
+                    (invoice.get("from_entity") or {}).get("auth") or {}
+                ).get("telegram_id")
+                try:
+                    telegram_id = int(raw_telegram_id)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invoice %s payer has no valid Telegram ID", invoice_id
+                    )
+                    continue
+                if telegram_id not in local_telegram_ids:
+                    logger.info(
+                        "Skipping invoice %s notification: Telegram user %s is not in Botka",
+                        invoice_id,
+                        telegram_id,
+                    )
+                    continue
+                try:
+                    sent = await context.bot.send_message(
+                        chat_id=telegram_id,
+                        text=format_notification(
                             invoice,
-                            context.settings.refinance_invoice_poll_seconds,
+                            is_new=_is_new_invoice(
+                                invoice,
+                                context.settings.refinance_invoice_poll_seconds,
+                            ),
                         ),
-                    ),
-                    reply_markup=notification_keyboard(invoice, telegram_id),
-                    disable_web_page_preview=True,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to notify Telegram user %s about invoice %s",
-                    telegram_id,
-                    invoice_id,
-                )
-                continue
-            await receipts.record(invoice_id, telegram_id, sent.message_id)
+                        reply_markup=notification_keyboard(invoice, telegram_id),
+                        disable_web_page_preview=True,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to notify Telegram user %s about invoice %s",
+                        telegram_id,
+                        invoice_id,
+                    )
+                    continue
+                await receipts.record(invoice_id, telegram_id, sent.message_id)
+    finally:
+        await client.close()

@@ -10,6 +10,8 @@ same username exists, the telegram_id is linked automatically
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import logging
 import time
 from datetime import timedelta
@@ -37,15 +39,26 @@ class RefinanceClient:
 
     _ALGORITHM = "HS256"
     _TOKEN_TTL = int(timedelta(hours=1).total_seconds())
+    _ROOM_TAG_ID = 19
+    _ROOM_CACHE_TTL_SECONDS = int(timedelta(hours=12).total_seconds())
+    _ROOM_CACHE_RETRY_SECONDS = int(timedelta(minutes=5).total_seconds())
 
     def __init__(self, settings: Settings) -> None:
         self._api_url = (settings.refinance_api_url or "").rstrip("/")
         self._secret_key = settings.refinance_secret_key or ""
         self._bot_entity_id = settings.refinance_bot_entity_id
+        self._http_client = httpx.AsyncClient()
+        self._room_entities_cache: list[dict] | None = None
+        self._room_entities_cached_at = 0.0
+        self._room_entities_refresh_after = 0.0
+        self._room_entities_lock = asyncio.Lock()
 
     @property
     def is_configured(self) -> bool:
         return bool(self._api_url and self._secret_key and self._bot_entity_id)
+
+    async def close(self) -> None:
+        await self._http_client.aclose()
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                      #
@@ -86,14 +99,13 @@ class RefinanceClient:
         headers: dict[str, str],
         params: dict[str, Any] | None = None,
     ) -> Any:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(
-                f"{self._api_url}{path}",
-                headers=headers,
-                params=params,
-            )
-            self._raise_for_status(r)
-            return r.json()
+        r = await self._http_client.get(
+            f"{self._api_url}{path}",
+            headers=headers,
+            params=params,
+        )
+        self._raise_for_status(r)
+        return r.json()
 
     async def _post(
         self,
@@ -101,14 +113,13 @@ class RefinanceClient:
         headers: dict[str, str],
         json: Any,
     ) -> Any:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"{self._api_url}{path}",
-                headers=headers,
-                json=json,
-            )
-            self._raise_for_status(r)
-            return r.json()
+        r = await self._http_client.post(
+            f"{self._api_url}{path}",
+            headers=headers,
+            json=json,
+        )
+        self._raise_for_status(r)
+        return r.json()
 
     async def _patch(
         self,
@@ -116,14 +127,13 @@ class RefinanceClient:
         headers: dict[str, str],
         json: Any,
     ) -> Any:
-        async with httpx.AsyncClient() as client:
-            r = await client.patch(
-                f"{self._api_url}{path}",
-                headers=headers,
-                json=json,
-            )
-            self._raise_for_status(r)
-            return r.json()
+        r = await self._http_client.patch(
+            f"{self._api_url}{path}",
+            headers=headers,
+            json=json,
+        )
+        self._raise_for_status(r)
+        return r.json()
 
     # ------------------------------------------------------------------ #
     # Entity / auth                                                         #
@@ -172,6 +182,63 @@ class RefinanceClient:
 
     async def get_entities_by_tag(
         self, actor_entity_id: int, tag_id: int, *, active: bool = True
+    ) -> list[dict]:
+        if tag_id != self._ROOM_TAG_ID or not active:
+            return await self._fetch_entities_by_tag(actor_entity_id, tag_id, active)
+
+        cached = self._get_cached_room_entities()
+        if cached is not None:
+            return cached
+
+        # Several callback queries can arrive together. Only let one of them
+        # refresh the room list while the rest wait for and reuse its result.
+        async with self._room_entities_lock:
+            cached = self._get_cached_room_entities()
+            if cached is not None:
+                return cached
+            stale = self._copy_room_entities()
+            try:
+                rooms = await self._fetch_entities_by_tag(
+                    actor_entity_id, tag_id, active
+                )
+            except Exception as exc:
+                # A stale room picker is still useful during a transient API
+                # failure. Refinance validates the selected room again when
+                # the invoice is paid, so stale data cannot bypass payment
+                # validation.
+                if stale is not None:
+                    self._room_entities_refresh_after = (
+                        time.monotonic() + self._ROOM_CACHE_RETRY_SECONDS
+                    )
+                    logger.warning(
+                        "Could not refresh Refinance room cache; using stale rooms: %s",
+                        exc,
+                    )
+                    return stale
+                raise
+            self._room_entities_cache = copy.deepcopy(rooms)
+            self._room_entities_cached_at = time.monotonic()
+            self._room_entities_refresh_after = 0.0
+            return copy.deepcopy(rooms)
+
+    def _get_cached_room_entities(self) -> list[dict] | None:
+        if self._room_entities_cache is None:
+            return None
+        now = time.monotonic()
+        age = now - self._room_entities_cached_at
+        if age >= self._ROOM_CACHE_TTL_SECONDS and now >= (
+            self._room_entities_refresh_after
+        ):
+            return None
+        return self._copy_room_entities()
+
+    def _copy_room_entities(self) -> list[dict] | None:
+        if self._room_entities_cache is None:
+            return None
+        return copy.deepcopy(self._room_entities_cache)
+
+    async def _fetch_entities_by_tag(
+        self, actor_entity_id: int, tag_id: int, active: bool
     ) -> list[dict]:
         items: list[dict] = []
         skip = 0
@@ -283,13 +350,14 @@ class RefinanceClient:
             {"status": status},
         )
 
-    async def delete_transaction(self, actor_entity_id: int, transaction_id: int) -> None:
-        async with httpx.AsyncClient() as client:
-            r = await client.delete(
-                f"{self._api_url}/transactions/{transaction_id}",
-                headers=self._entity_headers(actor_entity_id),
-            )
-            self._raise_for_status(r)
+    async def delete_transaction(
+        self, actor_entity_id: int, transaction_id: int
+    ) -> None:
+        r = await self._http_client.delete(
+            f"{self._api_url}/transactions/{transaction_id}",
+            headers=self._entity_headers(actor_entity_id),
+        )
+        self._raise_for_status(r)
 
     # ------------------------------------------------------------------ #
     # Invoices                                                              #
@@ -377,18 +445,17 @@ class RefinanceClient:
         amount: str,
         currency: str,
     ) -> dict:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                f"{self._api_url}/deposits/providers/keepz",
-                headers=self._entity_headers(entity_id),
-                params={
-                    "to_entity_id": entity_id,
-                    "amount": amount,
-                    "currency": currency.upper(),
-                },
-            )
-            self._raise_for_status(r)
-            return r.json()
+        r = await self._http_client.post(
+            f"{self._api_url}/deposits/providers/keepz",
+            headers=self._entity_headers(entity_id),
+            params={
+                "to_entity_id": entity_id,
+                "amount": amount,
+                "currency": currency.upper(),
+            },
+        )
+        self._raise_for_status(r)
+        return r.json()
 
     async def get_deposit(self, entity_id: int, deposit_id: int) -> dict:
         return await self._get(

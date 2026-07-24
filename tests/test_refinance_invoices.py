@@ -161,9 +161,7 @@ def test_room_override_changes_review_payload_and_receipt() -> None:
 
 def test_review_without_sufficient_balance_has_no_confirm_button() -> None:
     view = build_payment_view(sample_invoice())
-    balance = {
-        "completed": {"eur": "0.00", "usd": "39.69", "gel": "-319.25"}
-    }
+    balance = {"completed": {"eur": "0.00", "usd": "39.69", "gel": "-319.25"}}
 
     assert affordable_currencies(view, balance) == []
     assert format_review(view, balance) == "\n".join(
@@ -468,6 +466,7 @@ async def test_invoice_polling_notifies_once_and_persists_receipt(
     fake_client = SimpleNamespace(
         is_configured=True,
         get_pending_fee_invoices=AsyncMock(return_value=[invoice]),
+        close=AsyncMock(),
     )
     monkeypatch.setattr(invoice_job, "RefinanceClient", lambda settings: fake_client)
     monkeypatch.setattr(invoice_job, "_is_new_invoice", lambda invoice, seconds: False)
@@ -496,6 +495,7 @@ async def test_invoice_polling_notifies_once_and_persists_receipt(
     kwargs = bot.send_message.await_args.kwargs
     assert kwargs["chat_id"] == 1001
     assert "Pending monthly fee invoice #123" in kwargs["text"]
+    assert fake_client.close.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -506,6 +506,7 @@ async def test_failed_invoice_notification_is_retried(
     fake_client = SimpleNamespace(
         is_configured=True,
         get_pending_fee_invoices=AsyncMock(return_value=[sample_invoice()]),
+        close=AsyncMock(),
     )
     monkeypatch.setattr(invoice_job, "RefinanceClient", lambda settings: fake_client)
     bot = SimpleNamespace(
@@ -542,6 +543,7 @@ async def test_invoice_polling_skips_payer_without_telegram_id(
         get_pending_fee_invoices=AsyncMock(
             return_value=[sample_invoice(telegram_id=None)]
         ),
+        close=AsyncMock(),
     )
     monkeypatch.setattr(invoice_job, "RefinanceClient", lambda settings: fake_client)
     bot = SimpleNamespace(send_message=AsyncMock())
@@ -571,6 +573,7 @@ async def test_invoice_polling_skips_telegram_user_absent_from_botka(
     fake_client = SimpleNamespace(
         is_configured=True,
         get_pending_fee_invoices=AsyncMock(return_value=[sample_invoice()]),
+        close=AsyncMock(),
     )
     monkeypatch.setattr(invoice_job, "RefinanceClient", lambda settings: fake_client)
     bot = SimpleNamespace(send_message=AsyncMock())
@@ -618,6 +621,73 @@ async def test_refinance_client_pages_all_pending_fee_invoices() -> None:
     assert client._get.await_args_list[0].args[2]["skip"] == 0
     assert client._get.await_args_list[1].args[2]["skip"] == 100
     assert client._get.await_args_list[0].args[2]["tags_ids"] == 3
+
+
+@pytest.mark.asyncio
+async def test_refinance_client_caches_active_rooms_for_twelve_hours(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        bot_token="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        refinance_api_url="https://refinance.example",
+        refinance_secret_key="test-secret-key-with-at-least-32-bytes",
+        refinance_bot_entity_id=1,
+    )
+    client = RefinanceClient(settings)
+    now = 1_000.0
+    monkeypatch.setattr("botka.services.refinance_client.time.monotonic", lambda: now)
+    client._get = AsyncMock(
+        side_effect=[
+            {"items": [{"id": 60, "name": "music studio"}]},
+            {"items": [{"id": 58, "name": "electronics lab"}]},
+        ]
+    )
+
+    first = await client.get_entities_by_tag(200, 19)
+    first[0]["name"] = "mutated locally"
+    now += 12 * 60 * 60 - 1
+    cached = await client.get_entities_by_tag(201, 19)
+
+    assert cached == [{"id": 60, "name": "music studio"}]
+    assert client._get.await_count == 1
+
+    now += 1
+    refreshed = await client.get_entities_by_tag(201, 19)
+
+    assert refreshed == [{"id": 58, "name": "electronics lab"}]
+    assert client._get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_refinance_client_uses_stale_rooms_if_refresh_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        bot_token="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        refinance_api_url="https://refinance.example",
+        refinance_secret_key="test-secret-key-with-at-least-32-bytes",
+        refinance_bot_entity_id=1,
+    )
+    client = RefinanceClient(settings)
+    now = 1_000.0
+    monkeypatch.setattr("botka.services.refinance_client.time.monotonic", lambda: now)
+    client._get = AsyncMock(
+        return_value={"items": [{"id": 60, "name": "music studio"}]}
+    )
+    await client.get_entities_by_tag(200, 19)
+    now += 12 * 60 * 60
+    client._get.side_effect = RuntimeError("temporary outage")
+
+    rooms = await client.get_entities_by_tag(200, 19)
+    cached_rooms = await client.get_entities_by_tag(201, 19)
+
+    assert rooms == [{"id": 60, "name": "music studio"}]
+    assert cached_rooms == rooms
+    assert client._get.await_count == 2
 
 
 @pytest.mark.asyncio
