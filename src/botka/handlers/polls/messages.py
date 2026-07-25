@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.types import InputPollOption, InputPollOptionUnion, Message
-from typing import cast
+from aiogram.types import InputPollOption, InputPollOptionUnion, Message, MessageEntity
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
 from botka.handlers.polls.utils import (
+    ParsedPoll,
     build_awaiting_text,
     parse_poll_question,
     poll_close_at,
@@ -20,22 +20,20 @@ from botka.services.polls_service import PollsService
 router = Router(name=__name__)
 
 
-@router.message(F.poll)
-@inject
-async def poll_message_handler(
+async def create_managed_poll(
     message: Message,
-    polls_service: FromDishka[PollsService],
-    settings: FromDishka[Settings],
+    *,
+    parsed: ParsedPoll,
+    options: list[InputPollOptionUnion],
+    option_texts: list[str],
+    polls_service: PollsService,
+    settings: Settings,
+    allows_multiple_answers: bool = False,
+    description: str | None = None,
+    description_entities: list[MessageEntity] | None = None,
 ) -> None:
-    if message.poll is None or message.from_user is None:
+    if message.from_user is None:
         return
-    parsed = parse_poll_question(message.poll.question)
-    if parsed is None:
-        return
-    options = [
-        InputPollOption(text=option.text, text_entities=option.text_entities)
-        for option in message.poll.options
-    ]
     reply_to_message_id = (
         message.reply_to_message.message_id if message.reply_to_message else None
     )
@@ -50,18 +48,17 @@ async def poll_message_handler(
         chat_id=message.chat.id,
         message_thread_id=message.message_thread_id,
         question=parsed.display_question,
-        options=cast(list[InputPollOptionUnion], options),
+        options=options,
         reply_to_message_id=reply_to_message_id,
         is_anonymous=False,
-        allows_multiple_answers=message.poll.allows_multiple_answers,
+        allows_multiple_answers=allows_multiple_answers,
         allows_revoting=True,
         close_date=close_date,
-        description=message.poll.description,
-        description_entities=message.poll.description_entities,
+        description=description,
+        description_entities=description_entities,
     )
     if new_poll.poll is None:
         return
-    option_texts = [option.text for option in message.poll.options]
     ignored_option_ids = register_poll_ignored_options(new_poll.poll.id, option_texts)
     target_users = list(await polls_service.list_target_users(parsed.audience))
     awaiting_text = build_awaiting_text(
@@ -100,3 +97,32 @@ async def poll_message_handler(
         await message.delete()
     except TelegramBadRequest:
         pass
+
+
+@router.message(F.poll)
+@inject
+async def poll_message_handler(
+    message: Message,
+    polls_service: FromDishka[PollsService],
+    settings: FromDishka[Settings],
+) -> None:
+    if message.poll is None or message.from_user is None:
+        return
+    parsed = parse_poll_question(message.poll.question)
+    if parsed is None:
+        return
+    options = [
+        InputPollOption(text=option.text, text_entities=option.text_entities)
+        for option in message.poll.options
+    ]
+    await create_managed_poll(
+        message,
+        parsed=parsed,
+        options=options,
+        option_texts=[option.text for option in message.poll.options],
+        polls_service=polls_service,
+        settings=settings,
+        allows_multiple_answers=message.poll.allows_multiple_answers,
+        description=message.poll.description,
+        description_entities=message.poll.description_entities,
+    )

@@ -5,14 +5,63 @@ from datetime import datetime, timezone
 from aiogram import Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import InputPollOption, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.handlers.polls.utils import format_close_time
+from botka.config import Settings
+from botka.handlers.polls.messages import create_managed_poll
+from botka.handlers.polls.utils import format_close_time, parse_poll_question
 from botka.handlers.user_links import format_user_link
 from botka.services.polls_service import PollsService
 
 router = Router(name=__name__)
+
+DEFAULT_POLL_OPTIONS = ("Yes", "No", "See results")
+MAX_POLL_QUESTION_LENGTH = 300
+
+
+@router.message(Command("poll"))
+@inject
+async def poll_create_handler(
+    message: Message,
+    command: CommandObject,
+    polls_service: FromDishka[PollsService],
+    settings: FromDishka[Settings],
+) -> None:
+    await create_poll_from_command(message, command, polls_service, settings)
+
+
+async def create_poll_from_command(
+    message: Message,
+    command: CommandObject,
+    polls_service: PollsService,
+    settings: Settings,
+) -> None:
+    if message.from_user is None:
+        await message.reply("Cannot determine sender.")
+        return
+
+    question = (command.args or "").strip()
+    parsed = parse_poll_question(f"!{question}")
+    if parsed is None:
+        await message.reply(
+            "Usage: /poll [residents|members|everyone] &lt;question&gt;"
+        )
+        return
+    if len(parsed.display_question) > MAX_POLL_QUESTION_LENGTH:
+        await message.reply(
+            "Poll question is too long (maximum 300 characters, including the audience tag)."
+        )
+        return
+
+    await create_managed_poll(
+        message,
+        parsed=parsed,
+        options=[InputPollOption(text=text) for text in DEFAULT_POLL_OPTIONS],
+        option_texts=list(DEFAULT_POLL_OPTIONS),
+        polls_service=polls_service,
+        settings=settings,
+    )
 
 
 @router.message(Command("poll_close"))
