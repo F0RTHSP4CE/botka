@@ -42,6 +42,11 @@ COMMANDS: list[CommandInfo] = [
     ),
     CommandInfo("needs", "show open items with buttons", "Shopping"),
     CommandInfo(
+        "poll",
+        "create a public (non-anonymous) poll with Yes / No / See results",
+        "Polls",
+    ),
+    CommandInfo(
         "poll_close",
         "close a poll you created (or reply to the poll/awaiting message)",
         "Polls",
