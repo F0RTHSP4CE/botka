@@ -28,6 +28,7 @@ async def create_managed_poll(
     option_texts: list[str],
     polls_service: PollsService,
     settings: Settings,
+    delete_source_message: bool,
     allows_multiple_answers: bool = False,
     description: str | None = None,
     description_entities: list[MessageEntity] | None = None,
@@ -93,10 +94,11 @@ async def create_managed_poll(
         message_id=new_poll.message_id,
         disable_notification=True,
     )
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        pass
+    if delete_source_message:
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
 
 
 @router.message(F.poll)
@@ -122,6 +124,7 @@ async def poll_message_handler(
         option_texts=[option.text for option in message.poll.options],
         polls_service=polls_service,
         settings=settings,
+        delete_source_message=True,
         allows_multiple_answers=message.poll.allows_multiple_answers,
         description=message.poll.description,
         description_entities=message.poll.description_entities,
