@@ -61,6 +61,7 @@ async def create_poll_from_command(
         option_texts=list(DEFAULT_POLL_OPTIONS),
         polls_service=polls_service,
         settings=settings,
+        delete_source_message=False,
     )
 
 

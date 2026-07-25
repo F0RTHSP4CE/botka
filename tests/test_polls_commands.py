@@ -62,7 +62,7 @@ async def test_poll_command_creates_public_poll_with_default_options(settings):
         "poll-1", ["Yes", "No", "See results"]
     )
     bot.pin_chat_message.assert_awaited_once()
-    message.delete.assert_awaited_once()
+    message.delete.assert_not_awaited()
 
 
 async def test_poll_command_defaults_to_residents(settings):
