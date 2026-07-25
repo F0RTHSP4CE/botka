@@ -4,7 +4,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from botka.db.models import PollAudience
-from botka.handlers.polls.commands import create_poll_from_command
+from botka.handlers.polls.commands import (
+    create_custom_poll_from_command,
+    create_poll_from_command,
+)
 
 
 async def test_poll_command_creates_public_poll_with_default_options(settings):
@@ -142,4 +145,76 @@ async def test_poll_command_rejects_question_over_telegram_limit(settings):
 
     message.reply.assert_awaited_once_with(
         "Poll question is too long (maximum 300 characters, including the audience tag)."
+    )
+
+
+async def test_custom_poll_command_creates_poll_with_supplied_options(settings):
+    bot = SimpleNamespace(
+        send_poll=AsyncMock(
+            return_value=SimpleNamespace(
+                poll=SimpleNamespace(id="poll-custom"),
+                chat=SimpleNamespace(id=-100),
+                message_id=40,
+            )
+        ),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=41)),
+        pin_chat_message=AsyncMock(),
+    )
+    message = SimpleNamespace(
+        bot=bot,
+        chat=SimpleNamespace(id=-100),
+        message_thread_id=None,
+        reply_to_message=None,
+        from_user=SimpleNamespace(id=123, username="author"),
+        delete=AsyncMock(),
+        reply=AsyncMock(),
+    )
+    polls_service = SimpleNamespace(
+        list_target_users=AsyncMock(return_value=[]),
+        create_poll=AsyncMock(),
+        set_ignored_option_ids=AsyncMock(),
+        set_poll_options=AsyncMock(),
+    )
+
+    await create_custom_poll_from_command(
+        message,
+        SimpleNamespace(args="[everyone] Where next? | Mountains | Sea | Stay home"),
+        polls_service,
+        settings,
+    )
+
+    send_poll_kwargs = bot.send_poll.await_args.kwargs
+    assert send_poll_kwargs["question"] == "[everyone] Where next?"
+    assert [option.text for option in send_poll_kwargs["options"]] == [
+        "Mountains",
+        "Sea",
+        "Stay home",
+    ]
+    assert send_poll_kwargs["is_anonymous"] is False
+    assert polls_service.create_poll.await_args.kwargs["audience"] is (
+        PollAudience.everyone
+    )
+    polls_service.set_poll_options.assert_awaited_once_with(
+        "poll-custom", ["Mountains", "Sea", "Stay home"]
+    )
+    polls_service.set_ignored_option_ids.assert_not_awaited()
+    message.delete.assert_not_awaited()
+
+
+async def test_custom_poll_command_requires_two_options(settings):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123),
+        reply=AsyncMock(),
+    )
+
+    await create_custom_poll_from_command(
+        message,
+        SimpleNamespace(args="Question | Only one option"),
+        SimpleNamespace(),
+        settings,
+    )
+
+    message.reply.assert_awaited_once_with(
+        "Usage: /poll_custom [residents|members|everyone] &lt;question&gt; "
+        "| &lt;option 1&gt; | &lt;option 2&gt; [| ...]"
     )
