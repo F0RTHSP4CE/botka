@@ -18,6 +18,8 @@ router = Router(name=__name__)
 
 DEFAULT_POLL_OPTIONS = ("Yes", "No", "See results")
 MAX_POLL_QUESTION_LENGTH = 300
+MAX_POLL_OPTION_LENGTH = 100
+MAX_POLL_OPTIONS = 12
 
 
 @router.message(Command("poll"))
@@ -59,6 +61,64 @@ async def create_poll_from_command(
         parsed=parsed,
         options=[InputPollOption(text=text) for text in DEFAULT_POLL_OPTIONS],
         option_texts=list(DEFAULT_POLL_OPTIONS),
+        polls_service=polls_service,
+        settings=settings,
+        delete_source_message=False,
+    )
+
+
+@router.message(Command("poll_custom"))
+@inject
+async def poll_custom_create_handler(
+    message: Message,
+    command: CommandObject,
+    polls_service: FromDishka[PollsService],
+    settings: FromDishka[Settings],
+) -> None:
+    await create_custom_poll_from_command(message, command, polls_service, settings)
+
+
+async def create_custom_poll_from_command(
+    message: Message,
+    command: CommandObject,
+    polls_service: PollsService,
+    settings: Settings,
+) -> None:
+    if message.from_user is None:
+        await message.reply("Cannot determine sender.")
+        return
+
+    parts = [part.strip() for part in (command.args or "").split("|")]
+    if len(parts) < 3 or any(not part for part in parts):
+        await message.reply(
+            "Usage: /poll_custom [residents|members|everyone] &lt;question&gt; "
+            "| &lt;option 1&gt; | &lt;option 2&gt; [| ...]"
+        )
+        return
+
+    question, *option_texts = parts
+    if len(option_texts) > MAX_POLL_OPTIONS:
+        await message.reply("A poll can have at most 12 options.")
+        return
+    if any(len(option) > MAX_POLL_OPTION_LENGTH for option in option_texts):
+        await message.reply("Each poll option can have at most 100 characters.")
+        return
+
+    parsed = parse_poll_question(f"!{question}")
+    if parsed is None:
+        await message.reply("Poll question cannot be empty.")
+        return
+    if len(parsed.display_question) > MAX_POLL_QUESTION_LENGTH:
+        await message.reply(
+            "Poll question is too long (maximum 300 characters, including the audience tag)."
+        )
+        return
+
+    await create_managed_poll(
+        message,
+        parsed=parsed,
+        options=[InputPollOption(text=text) for text in option_texts],
+        option_texts=option_texts,
         polls_service=polls_service,
         settings=settings,
         delete_source_message=False,

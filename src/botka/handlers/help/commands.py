@@ -47,6 +47,11 @@ COMMANDS: list[CommandInfo] = [
         "Polls",
     ),
     CommandInfo(
+        "poll_custom",
+        "create a public poll with custom options separated by |",
+        "Polls",
+    ),
+    CommandInfo(
         "poll_close",
         "close a poll you created (or reply to the poll/awaiting message)",
         "Polls",
