@@ -10,10 +10,14 @@ from aiogram.enums import ParseMode
 from dishka.integrations.aiogram import setup_dishka
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+import botka.handlers.menu as menu_handler
+import botka.handlers.planka.menu as planka_menu
+import botka.handlers.refinance.menu as refinance_menu
 from botka.config import Settings
 from botka.db.session import init_models
 from botka.di.container import build_container
 from botka.handlers import (
+    bambu,
     borrowed,
     doors,
     fridge,
@@ -27,11 +31,7 @@ from botka.handlers import (
     shopping,
     ups,
     users,
-    bambu,
 )
-import botka.handlers.menu as menu_handler
-import botka.handlers.refinance.menu as refinance_menu
-import botka.handlers.planka.menu as planka_menu
 from botka.handlers.help.commands import get_bot_commands
 from botka.handlers.pins.messages import NewTopicForwardMiddleware
 from botka.handlers.polls import answers as poll_answers
@@ -42,7 +42,12 @@ from botka.middlewares import MediaGroupCollectorMiddleware, UserSyncMiddleware
 from botka.periodic import periodic_loop
 from botka.services.mac_tracker_service import mac_tracker_poll_loop
 from botka.services.planka_client import PlankaClient
+from botka.services.planka_command_service import PlankaCommandService
+from botka.services.planka_notification_service import PlankaNotificationService
 from botka.services.planka_poller import run_planka_poller
+from botka.services.planka_todo_publisher import PlankaTodoPublisher
+from botka.services.shopping_list_service import ShoppingListService
+from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 
 
 async def _run() -> None:
@@ -123,31 +128,53 @@ async def _run() -> None:
     dp.edited_message.middleware(user_sync)
     dp.callback_query.middleware(user_sync)
     dp.poll_answer.middleware(user_sync)
-    mac_poll_task = asyncio.create_task(
-        mac_tracker_poll_loop(bot, sessionmaker, settings)
-    )
-    mac_web_task = asyncio.create_task(run_mac_tracker_server(settings, sessionmaker))
-    periodic_task = asyncio.create_task(periodic_loop(bot, sessionmaker, settings))
     planka_client = await container.get(PlankaClient)
-    planka_poller_task = asyncio.create_task(
-        run_planka_poller(bot, planka_client, settings)
+    planka_notifications = await container.get(PlankaNotificationService)
+    todo_publisher = await container.get(PlankaTodoPublisher)
+    needs_publisher = await container.get(ShoppingNeedsPublisher)
+
+    async def _refresh_todo_topics() -> None:
+        async with container() as request_container:
+            planka_service = await request_container.get(PlankaCommandService)
+            await todo_publisher.refresh(bot, planka_service)
+
+    async def _refresh_shopping_list() -> None:
+        async with container() as request_container:
+            shopping_service = await request_container.get(ShoppingListService)
+            await needs_publisher.refresh(bot, shopping_service)
+
+    background_tasks = (
+        asyncio.create_task(mac_tracker_poll_loop(bot, sessionmaker, settings)),
+        asyncio.create_task(run_mac_tracker_server(settings, sessionmaker)),
+        asyncio.create_task(periodic_loop(bot, sessionmaker, settings)),
+        asyncio.create_task(
+            run_planka_poller(
+                bot,
+                planka_client,
+                settings,
+                planka_notifications,
+                todo_refresh=_refresh_todo_topics,
+            )
+        ),
     )
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_my_commands(get_bot_commands())
+    for name, refresh in (
+        ("todo", _refresh_todo_topics),
+        ("shopping", _refresh_shopping_list),
+    ):
+        try:
+            await refresh()
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to initialize canonical %s message", name
+            )
     try:
         await dp.start_polling(bot)
     finally:
-        mac_poll_task.cancel()
-        mac_web_task.cancel()
-        periodic_task.cancel()
-        planka_poller_task.cancel()
-        await asyncio.gather(
-            mac_poll_task,
-            mac_web_task,
-            periodic_task,
-            planka_poller_task,
-            return_exceptions=True,
-        )
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
         await container.close()
         await bot.session.close()
         await engine.dispose()

@@ -3,14 +3,18 @@ from __future__ import annotations
 import html
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
-from botka.handlers.shopping.needs import build_needs_keyboard, pin_latest_needs
-from botka.handlers.user_links import format_user_link
 from botka.db.models import User, UserTier
-from botka.services.shopping_list_service import ShoppingBuyConfirmationTracker, ShoppingListService
+from botka.handlers.user_links import format_user_link
+from botka.services.shopping_list_service import (
+    ShoppingBuyConfirmationTracker,
+    ShoppingListService,
+)
+from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 
 router = Router(name=__name__)
 
@@ -21,6 +25,7 @@ async def buy_callback(
     callback: CallbackQuery,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
     confirmation_tracker: FromDishka[ShoppingBuyConfirmationTracker],
     user_record: User | None = None,
 ) -> None:
@@ -53,25 +58,23 @@ async def buy_callback(
     if item is None:
         await callback.answer("Item not found.", show_alert=True)
         return
-    items = await shopping_service.list_open_items()
-    if settings.shopping_chat_id is not None and settings.shopping_topic_id is not None:
-        await pin_latest_needs(
-            callback.bot,
-            settings.shopping_chat_id,
-            settings.shopping_topic_id,
-            items,
-            shopping_service,
-            message=callback.message,
-            pin=False,
-        )
-    else:
-        if not items:
-            await callback.message.edit_text("Shopping list is empty.")
-        else:
+    view = await needs_publisher.load(shopping_service)
+    await needs_publisher.publish(callback.bot, view)
+    is_canonical = await needs_publisher.is_canonical_message(
+        callback.message.chat.id,
+        callback.message.message_thread_id,
+        callback.message.message_id,
+    )
+    if not is_canonical:
+        try:
             await callback.message.edit_text(
-                "Shopping list:",
-                reply_markup=build_needs_keyboard(items),
+                view.text,
+                parse_mode="HTML",
+                reply_markup=view.keyboard,
             )
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                raise
     if settings.shopping_chat_id is not None:
         actor = format_user_link(callback.from_user)
         item_text = html.escape(item.text)

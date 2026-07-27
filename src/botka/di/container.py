@@ -8,26 +8,30 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from botka.config import Settings
 from botka.db.session import create_engine, create_sessionmaker
+from botka.services.bambu_service import BambuService
 from botka.services.borrowed_item_detector import BorrowedItemDetector
 from botka.services.borrowed_items_service import BorrowedItemsService
+from botka.services.fridge_client import FridgeClient
 from botka.services.mac_tracker_service import MacTrackerService, MikrotikDhcpClient
+from botka.services.meeting_service import MeetingService
 from botka.services.planka_album_tracker import PlankaAlbumTracker
+from botka.services.planka_action_dispatcher import PlankaActionDispatcher
 from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
 from botka.services.planka_client import PlankaClient
 from botka.services.planka_command_service import PlankaCommandService
 from botka.services.planka_mappings_service import PlankaCardMappingService
+from botka.services.planka_notification_service import PlankaNotificationService
+from botka.services.planka_todo_publisher import PlankaTodoPublisher
 from botka.services.polls_service import PollsService
-from botka.services.shopping_list_service import (
-    ShoppingListService,
-    ShoppingBuyConfirmationTracker,
-)
-from botka.services.fridge_client import FridgeClient
-from botka.services.meeting_service import MeetingService
 from botka.services.refinance_client import RefinanceClient
+from botka.services.shopping_list_service import (
+    ShoppingBuyConfirmationTracker,
+    ShoppingListService,
+)
+from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 from botka.services.ups_client import UpsClient
 from botka.services.user_service import UserService
 from botka.services.usbutler_service import UsbutlerService
-from botka.services.bambu_service import BambuService
 
 
 class AppProvider(Provider):
@@ -65,6 +69,14 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def shopping_confirmation_tracker(self) -> ShoppingBuyConfirmationTracker:
         return ShoppingBuyConfirmationTracker()
+
+    @provide(scope=Scope.APP)
+    def shopping_needs_publisher(
+        self,
+        sessionmaker: async_sessionmaker,
+        settings: Settings,
+    ) -> ShoppingNeedsPublisher:
+        return ShoppingNeedsPublisher(sessionmaker, settings)
 
     @provide(scope=Scope.REQUEST)
     def borrowed_items_service(self, session: AsyncSession) -> BorrowedItemsService:
@@ -142,6 +154,12 @@ class AppProvider(Provider):
     def planka_album_tracker(self) -> PlankaAlbumTracker:
         return PlankaAlbumTracker()
 
+    @provide(scope=Scope.APP)
+    def planka_notification_service(
+        self, settings: Settings
+    ) -> PlankaNotificationService:
+        return PlankaNotificationService(settings)
+
     @provide(scope=Scope.REQUEST)
     def planka_mappings_service(
         self, session: AsyncSession
@@ -153,6 +171,35 @@ class AppProvider(Provider):
         self, session: AsyncSession
     ) -> PlankaAttachmentCacheService:
         return PlankaAttachmentCacheService(session)
+
+    @provide(scope=Scope.APP)
+    def planka_todo_publisher(
+        self,
+        sessionmaker: async_sessionmaker,
+        settings: Settings,
+    ) -> PlankaTodoPublisher:
+        return PlankaTodoPublisher(sessionmaker, settings)
+
+    @provide(scope=Scope.APP)
+    async def planka_action_dispatcher(
+        self,
+        sessionmaker: async_sessionmaker,
+        settings: Settings,
+        planka: PlankaClient,
+        tracker: PlankaAlbumTracker,
+        notifications: PlankaNotificationService,
+        todo_publisher: PlankaTodoPublisher,
+    ) -> AsyncIterable[PlankaActionDispatcher]:
+        dispatcher = PlankaActionDispatcher(
+            sessionmaker,
+            settings,
+            planka,
+            tracker,
+            notifications,
+            todo_publisher,
+        )
+        yield dispatcher
+        await dispatcher.close()
 
     @provide(scope=Scope.REQUEST)
     def planka_command_service(

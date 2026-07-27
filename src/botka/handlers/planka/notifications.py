@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import random
 
 from botka.services.planka_client import PlankaActionEvent
 
@@ -12,51 +11,6 @@ _DOING_KEYWORDS = frozenset({"progress", "doing", "active", "working", "taken"})
 _TODO_KEYWORDS = frozenset(
     {"todo", "to-do", "to do", "available", "backlog", "open", "quest"}
 )
-
-_QUEST_DONE_EMOJIS = [
-    "🎉",
-    "🌟",
-    "🔥",
-    "🏆",
-    "✨",
-    "🎊",
-    "⭐",
-    "💫",
-    "🎯",
-    "🥳",
-    "🍾",
-    "🪄",
-    "🏅",
-    "💥",
-    "🌈",
-    "🎖️",
-    "🚀",
-    "💎",
-    "👑",
-    "🦾",
-    "⚡",
-    "🌠",
-    "🎆",
-    "🎇",
-    "🪩",
-    "🥂",
-    "🍻",
-    "🤩",
-    "😎",
-    "🙌",
-    "👏",
-    "💪",
-    "🫡",
-    "🫶",
-    "❤️‍🔥",
-    "🐉",
-    "⚔️",
-    "🦄",
-    "🍷",
-    "🧬",
-    "🛡️",
-    "🛠️",
-]
 
 
 def _classify_list(name: str, list_type: str) -> str:
@@ -75,7 +29,6 @@ def _classify_list(name: str, list_type: str) -> str:
 
 def notification_text(
     action: PlankaActionEvent,
-    board_name: str,
     base_url: str,
     author_html: str,
     *,
@@ -95,17 +48,14 @@ def notification_text(
     if action.type == "createCard" and action.to_list:
         if not notify_new_quests:
             return None
-        return f"📜 New quest: {link} — added by {author_html}"
+        return f"📜 New quest: {link}"
 
     if action.type == "moveCard" and action.to_list:
         kind = _classify_list(action.to_list.name, action.to_list.type)
         if kind == "trash":
             return f"🗑️ {link} — discarded by {author_html}"
         if kind == "done":
-            rng = random.Random()
-            prefix = "".join(rng.choices(_QUEST_DONE_EMOJIS, k=rng.randint(1, 2)))
-            suffix = "".join(rng.choices(_QUEST_DONE_EMOJIS, k=rng.randint(1, 2)))
-            return f"{prefix} {author_html} completed the quest {link} {suffix}"
+            return f"✅ {author_html} completed the quest {link}"
         if kind == "doing":
             return f"⚔️ {link} — taken by {author_html}"
         if kind == "todo":

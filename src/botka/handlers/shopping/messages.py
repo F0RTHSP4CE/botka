@@ -8,9 +8,9 @@ from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
 from botka.db.models import User, UserTier
-from botka.handlers.shopping.needs import pin_latest_needs
 from botka.handlers.user_links import format_user_link
 from botka.services.shopping_list_service import ShoppingListService
+from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 
 router = Router(name=__name__)
 
@@ -21,6 +21,7 @@ async def topic_list_handler(
     message: Message,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
     user_record: User | None = None,
 ) -> None:
     if message.text is None:
@@ -35,15 +36,7 @@ async def topic_list_handler(
     if not items:
         return
     await shopping_service.add_items(message.from_user.id, items)
-    items_open = await shopping_service.list_open_items()
-    await pin_latest_needs(
-        message.bot,
-        settings.shopping_chat_id,
-        settings.shopping_topic_id,
-        items_open,
-        shopping_service,
-        pin=False,
-    )
+    await needs_publisher.refresh_safely(message.bot, shopping_service)
     if settings.shopping_chat_id is not None:
         actor = format_user_link(message.from_user)
         lines = "\n".join(f"- {html.escape(item)}" for item in items)

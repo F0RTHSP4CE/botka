@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import html
-
 import logging
 from typing import Any, Awaitable, Callable
 
@@ -18,12 +17,12 @@ from aiogram.types import (
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
+from botka.services.borrowed_items_service import BorrowedItemsService
+from botka.services.planka_todo_publisher import PlankaTodoPublisher
+from botka.services.polls_service import PollsService
+from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 
 log = logging.getLogger(__name__)
-from botka.services.borrowed_items_service import BorrowedItemsService
-from botka.services.polls_service import PollsService
-from botka.services.shopping_list_service import ShoppingListService
-
 router = Router(name=__name__)
 
 _MEDIA_GROUP_CACHE: dict[tuple[int, str], list[int]] = {}
@@ -427,25 +426,27 @@ async def pinned_message_handler(
     settings: FromDishka[Settings],
     borrowed_service: FromDishka[BorrowedItemsService],
     polls_service: FromDishka[PollsService],
-    shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
     pinned = message.pinned_message
     if pinned is None:
         return
     if settings.pins_chat_id is None:
         return
-    if (
-        settings.shopping_chat_id is not None
-        and settings.shopping_topic_id is not None
-        and pinned.chat.id == settings.shopping_chat_id
-        and pinned.message_thread_id == settings.shopping_topic_id
+    if await todo_publisher.is_canonical_message(
+        pinned.chat.id,
+        pinned.chat.username,
+        pinned.message_thread_id,
+        pinned.message_id,
     ):
-        needs_message_id = await shopping_service.get_needs_message_id(
-            settings.shopping_chat_id,
-            settings.shopping_topic_id,
-        )
-        if needs_message_id == pinned.message_id:
-            return
+        return
+    if await needs_publisher.is_canonical_message(
+        pinned.chat.id,
+        pinned.message_thread_id,
+        pinned.message_id,
+    ):
+        return
     borrowed_items = await borrowed_service.list_items_for_message(
         pinned.chat.id, pinned.message_id
     )

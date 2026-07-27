@@ -199,6 +199,22 @@ class PlankaAttachmentTelegramCache(Base):
     )
 
 
+class PlankaTodoMessage(Base):
+    __tablename__ = "planka_todo_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_chat_id",
+            "topic_id",
+            name="uq_planka_todo_message_target_topic",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_chat_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    topic_id: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    message_id: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class AgendaTopic(Base):
     __tablename__ = "agenda_topics"
 

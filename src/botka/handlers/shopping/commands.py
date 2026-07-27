@@ -3,7 +3,6 @@ from __future__ import annotations
 import html
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -15,12 +14,8 @@ from botka.config import Settings
 from botka.db.models import User, UserTier
 from botka.handlers.menu import Btn, cancel_kb, send_main_menu
 from botka.handlers.user_links import format_user_link
-from botka.handlers.shopping.needs import (
-    build_needs_keyboard,
-    needs_text,
-    pin_latest_needs,
-)
 from botka.services.shopping_list_service import ShoppingListService
+from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 
 router = Router(name=__name__)
 
@@ -34,6 +29,7 @@ async def _do_need_item(
     item_text: str,
     settings: Settings,
     shopping_service: ShoppingListService,
+    needs_publisher: ShoppingNeedsPublisher,
     user_record: User | None,
     tg_user: TelegramUser,
 ) -> None:
@@ -48,15 +44,7 @@ async def _do_need_item(
     else:
         await shopping_service.add_item(tg_user.id, item_text)
         added_items = [item_text]
-    items = await shopping_service.list_open_items()
-    await pin_latest_needs(
-        message.bot,
-        settings.shopping_chat_id,
-        settings.shopping_topic_id,
-        items,
-        shopping_service,
-        pin=False,
-    )
+    await needs_publisher.refresh_safely(message.bot, shopping_service)
     if settings.shopping_topic_id != message.message_thread_id:
         if len(added_items) == 1:
             await message.reply(
@@ -88,48 +76,35 @@ async def _do_need_item(
 
 async def _do_needs(
     message: Message,
-    settings: Settings,
     shopping_service: ShoppingListService,
+    needs_publisher: ShoppingNeedsPublisher,
 ) -> None:
-    items = await shopping_service.list_open_items()
-    is_shopping_thread = (
-        settings.shopping_chat_id == message.chat.id
-        and settings.shopping_topic_id == message.message_thread_id
-    )
-    if is_shopping_thread:
-        previous_message_id = await shopping_service.get_needs_message_id(
-            settings.shopping_chat_id,
-            settings.shopping_topic_id,
-        )
-        response = await message.reply(
-            needs_text(items),
-            reply_markup=build_needs_keyboard(items) if items else None,
-        )
-        if (
-            previous_message_id is not None
-            and previous_message_id != response.message_id
-        ):
-            try:
-                await message.bot.delete_message(
-                    chat_id=settings.shopping_chat_id,
-                    message_id=previous_message_id,
-                )
-            except TelegramBadRequest:
-                pass
-        await pin_latest_needs(
-            message.bot,
-            settings.shopping_chat_id,
-            settings.shopping_topic_id,
-            items,
-            shopping_service,
-            message=response,
-            pin=True,
+    view = await needs_publisher.load(shopping_service)
+    if message.chat.type == "private":
+        await message.reply(
+            view.text,
+            parse_mode="HTML",
+            reply_markup=view.keyboard,
         )
         return
-    await message.reply(
-        needs_text(items),
-        reply_markup=build_needs_keyboard(items) if items else None,
-    )
+    if not needs_publisher.has_target:
+        await message.reply("Shopping list topic is not configured.")
+        return
+
+    publication = await needs_publisher.publish(message.bot, view)
+    if publication.link:
+        await message.reply(
+            f'📌 <a href="{html.escape(publication.link)}">'
+            "Open the pinned shopping list</a>",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    elif publication.published:
+        await message.reply("The pinned shopping list was updated.")
+    else:
+        await message.reply(
+            "I couldn't update the pinned shopping list. Please try again later."
+        )
 
 
 @router.message(Command("need"))
@@ -139,6 +114,7 @@ async def need_handler(
     command: CommandObject,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
     user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
@@ -149,7 +125,13 @@ async def need_handler(
         await message.reply(html.escape("Usage: /need <item>"))
         return
     await _do_need_item(
-        message, text, settings, shopping_service, user_record, message.from_user
+        message,
+        text,
+        settings,
+        shopping_service,
+        needs_publisher,
+        user_record,
+        message.from_user,
     )
 
 
@@ -157,20 +139,20 @@ async def need_handler(
 @inject
 async def needs_handler(
     message: Message,
-    settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
 ) -> None:
-    await _do_needs(message, settings, shopping_service)
+    await _do_needs(message, shopping_service, needs_publisher)
 
 
 @router.message(F.text == Btn.NEEDS, F.chat.type == "private")
 @inject
 async def menu_needs_message(
     message: Message,
-    settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
 ) -> None:
-    await _do_needs(message, settings, shopping_service)
+    await _do_needs(message, shopping_service, needs_publisher)
 
 
 @router.message(F.text == Btn.NEED_ITEM, F.chat.type == "private")
@@ -192,6 +174,7 @@ async def need_dialog_text_handler(
     message: Message,
     settings: FromDishka[Settings],
     shopping_service: FromDishka[ShoppingListService],
+    needs_publisher: FromDishka[ShoppingNeedsPublisher],
     state: FSMContext,
     user_record: User | None = None,
 ) -> None:
@@ -203,6 +186,7 @@ async def need_dialog_text_handler(
         message.text.strip(),
         settings,
         shopping_service,
+        needs_publisher,
         user_record,
         message.from_user,
     )

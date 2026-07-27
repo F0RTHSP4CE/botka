@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from botka.handlers.pins import messages as pins_messages
 from botka.handlers.pins.messages import _copy_or_resend
 
 
@@ -32,6 +33,139 @@ def _source_with_media(media_field: str, value: object) -> SimpleNamespace:
     message = _source_message(with_video=False)
     setattr(message, media_field, value)
     return message
+
+
+@pytest.mark.asyncio
+async def test_canonical_todo_pin_is_not_forwarded() -> None:
+    bot = SimpleNamespace(
+        id=123,
+        copy_message=AsyncMock(),
+        send_message=AsyncMock(),
+    )
+    pinned = SimpleNamespace(
+        chat=SimpleNamespace(id=-100123, username=None),
+        message_thread_id=77,
+        message_id=456,
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123, is_bot=True),
+        bot=bot,
+        pinned_message=pinned,
+    )
+    borrowed_service = SimpleNamespace(
+        list_items_for_message=AsyncMock()
+    )
+    polls_service = SimpleNamespace(get_poll=AsyncMock())
+    needs_publisher = SimpleNamespace(is_canonical_message=AsyncMock())
+    todo_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=True)
+    )
+
+    await pins_messages.pinned_message_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(pins_chat_id=999),
+        borrowed_service,
+        polls_service,
+        needs_publisher,
+        todo_publisher,
+    )
+
+    todo_publisher.is_canonical_message.assert_awaited_once_with(
+        -100123, None, 77, 456
+    )
+    borrowed_service.list_items_for_message.assert_not_awaited()
+    polls_service.get_poll.assert_not_awaited()
+    needs_publisher.is_canonical_message.assert_not_awaited()
+    bot.copy_message.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_canonical_shopping_pin_is_not_forwarded() -> None:
+    bot = SimpleNamespace(copy_message=AsyncMock(), send_message=AsyncMock())
+    pinned = SimpleNamespace(
+        chat=SimpleNamespace(id=-100321, username=None),
+        message_thread_id=88,
+        message_id=654,
+    )
+    message = SimpleNamespace(bot=bot, pinned_message=pinned)
+    borrowed_service = SimpleNamespace(
+        list_items_for_message=AsyncMock()
+    )
+    polls_service = SimpleNamespace(get_poll=AsyncMock())
+    needs_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=True)
+    )
+    todo_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=False)
+    )
+
+    await pins_messages.pinned_message_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(
+            pins_chat_id=999,
+            shopping_chat_id=-100321,
+            shopping_topic_id=88,
+        ),
+        borrowed_service,
+        polls_service,
+        needs_publisher,
+        todo_publisher,
+    )
+
+    needs_publisher.is_canonical_message.assert_awaited_once_with(
+        -100321, 88, 654
+    )
+    borrowed_service.list_items_for_message.assert_not_awaited()
+    bot.copy_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_other_bot_pin_is_forwarded_as_before() -> None:
+    pinned = _source_message(with_video=False)
+    pinned.chat.title = "Tracked"
+    pinned.chat.full_name = None
+    pinned.message_thread_id = 77
+    pinned.poll = None
+    pinned.media_group_id = None
+    pinned.from_user = SimpleNamespace(id=123, full_name="Bot")
+    pinned.sender_chat = None
+    pinned.text = "Ordinary bot message"
+    bot = SimpleNamespace(
+        id=123,
+        copy_message=AsyncMock(),
+        send_message=AsyncMock(),
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123, is_bot=True),
+        bot=bot,
+        pinned_message=pinned,
+    )
+    borrowed_service = SimpleNamespace(
+        list_items_for_message=AsyncMock(return_value=[])
+    )
+    polls_service = SimpleNamespace(get_poll=AsyncMock())
+    needs_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=False)
+    )
+    todo_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=False)
+    )
+
+    await pins_messages.pinned_message_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(
+            pins_chat_id=999,
+            shopping_chat_id=None,
+            shopping_topic_id=None,
+        ),
+        borrowed_service,
+        polls_service,
+        needs_publisher,
+        todo_publisher,
+    )
+
+    bot.copy_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio

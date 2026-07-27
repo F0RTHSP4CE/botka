@@ -63,6 +63,7 @@ class PlankaCardDetail:
     task_lists: list[PlankaTaskList]
     attachments: list[PlankaAttachment]
     has_other_attachments: bool = False
+    list_id: str = ""
 
 
 @dataclass
@@ -294,6 +295,7 @@ class PlankaClient:
             task_lists=task_lists,
             attachments=attachments,
             has_other_attachments=has_other_attachments,
+            list_id=str(raw_card.get("listId") or ""),
         )
 
     async def download_attachment(self, attachment_url: str) -> bytes | None:

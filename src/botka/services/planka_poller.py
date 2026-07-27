@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from collections.abc import Awaitable, Callable
 
 from aiogram import Bot
 
@@ -17,6 +18,7 @@ from botka.services.planka_client import (
     PlankaClientError,
     PlankaUser,
 )
+from botka.services.planka_notification_service import PlankaNotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +71,16 @@ async def _resolve_author(
     return _format_planka_author(action.user_id, users)
 
 
-async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) -> None:
+async def run_planka_poller(
+    bot: Bot,
+    planka: PlankaClient,
+    settings: Settings,
+    notifications: PlankaNotificationService,
+    todo_refresh: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     """Poll Planka board actions and send notifications to Telegram."""
-    targets = settings.get_planka_notification_targets()
     board_id = settings.planka_board_id
-    if not targets or not board_id:
+    if not notifications.has_targets or not board_id:
         logger.info(
             "Planka poller disabled: BOTKA_PLANKA_NOTIFICATION_CHAT_IDS or BOTKA_PLANKA_BOARD_ID not set"
         )
@@ -83,10 +90,12 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
         return
 
     base_url = str(settings.planka_base_url)
-    board_name = settings.planka_board_name
     interval = settings.planka_poll_interval_seconds
     last_seen_id: str | None = None
-    logger.info("Planka poller started, notifying %d target(s)", len(targets))
+    logger.info(
+        "Planka poller started, notifying %d target(s)",
+        notifications.target_count,
+    )
 
     while True:
         try:
@@ -109,7 +118,6 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
                 author_html, silent = await _resolve_author(action, page.users, planka)
                 text = notification_text(
                     action,
-                    board_name,
                     base_url,
                     author_html,
                     notify_new_quests=settings.planka_notify_new_quests,
@@ -117,22 +125,17 @@ async def run_planka_poller(bot: Bot, planka: PlankaClient, settings: Settings) 
                 )
                 if not text:
                     continue
-                for chat_id, thread_id in targets:
-                    try:
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=text,
-                            parse_mode="HTML",
-                            message_thread_id=thread_id,
-                            disable_notification=silent,
-                            link_preview_options={"is_disabled": True},
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Failed to send notification for action %s to %s",
-                            action.id,
-                            chat_id,
-                        )
+                await notifications.notify_polled_action(
+                    bot,
+                    action,
+                    text,
+                    silent=silent,
+                )
+            if todo_refresh is not None and new_actions:
+                try:
+                    await todo_refresh()
+                except Exception:
+                    logger.exception("Failed to refresh canonical todo messages")
 
         except PlankaClientError as exc:
             logger.warning("Planka poller error: %s", exc)

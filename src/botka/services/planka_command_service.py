@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 
 from botka.config import Settings
 from botka.services.planka_album_tracker import PlankaAlbumTracker
@@ -25,6 +26,11 @@ _DESCRIPTION_SEPARATOR = "\n\n---\n"
 
 def _now_label() -> str:
     return datetime.now(timezone.utc).strftime("%d %b %Y %H:%M UTC")
+
+
+def _actor_label(actor: tuple[int, str | None]) -> str:
+    telegram_id, username = actor
+    return f"@{username}" if username else f"tg:{telegram_id}"
 
 
 def _split_description(description: str) -> tuple[str, list[str]]:
@@ -67,7 +73,7 @@ class PlankaListNotConfiguredError(Exception):
     pass
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class CardEntry:
     short_id: int
     card_id: str
@@ -77,7 +83,19 @@ class CardEntry:
     assignee: str | None = None  # e.g. "@username" extracted from description
 
 
-@dataclass
+class CardState(StrEnum):
+    TODO = "todo"
+    DOING = "doing"
+    DONE = "done"
+
+
+@dataclass(frozen=True, slots=True)
+class TodoSections:
+    available: tuple[CardEntry, ...]
+    in_progress: tuple[CardEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CreateTodoResult:
     short_id: int
     card_id: str
@@ -86,26 +104,27 @@ class CreateTodoResult:
     attachment_count: int
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class MoveTaskResult:
     card_id: str
     card_name: str
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class AttachFileResult:
     card_id: str
     card_name: str
     filename: str
 
 
-@dataclass
+@dataclass(slots=True)
 class CardDetailResult:
     short_id: int
     name: str
     description: str
     task_lists: list[PlankaTaskList]
     attachments: list[tuple[PlankaAttachment, bytes]] = field(default_factory=list)
+    state: CardState | None = None
 
 
 class PlankaCommandService:
@@ -142,10 +161,6 @@ class PlankaCommandService:
         return (self._settings.planka_base_url or "").rstrip("/")
 
     @property
-    def timezone(self) -> str:
-        return self._settings.timezone or "UTC"
-
-    @property
     def show_card_links(self) -> bool:
         return self._settings.planka_show_card_links
 
@@ -155,61 +170,24 @@ class PlankaCommandService:
     async def get_board_lists(self, board_id: str) -> list[PlankaList]:
         return await self._planka.get_board_lists(board_id)
 
-    async def list_todos(self) -> list[tuple[str, list[CardEntry]]]:
-        sections_cfg: list[tuple[str, str]] = [("TODO", self._settings.planka_todo_list_id)]  # type: ignore[list-item]
-        if self._settings.planka_doing_list_id:
-            sections_cfg.append(("IN PROGRESS", self._settings.planka_doing_list_id))
+    async def list_todos(self) -> TodoSections:
+        if not self.todo_list_id:
+            raise PlankaListNotConfiguredError("TODO list is not configured")
+        sections_cfg = [self.todo_list_id]
+        if self.doing_list_id:
+            sections_cfg.append(self.doing_list_id)
 
-        # Fetch cards from all sections concurrently.
-        fetch_coros = [self._planka.get_cards(list_id) for _, list_id in sections_cfg]
-        all_card_lists = await asyncio.gather(*fetch_coros)
-
-        section_card_lists = all_card_lists[: len(sections_cfg)]
-
-        # Collect all unique cards so we can batch-fetch their details.
-        seen_ids: set[str] = set()
-        unique_cards = []
-        for cards in section_card_lists:
-            for card in cards:
-                if card.id not in seen_ids:
-                    seen_ids.add(card.id)
-                    unique_cards.append(card)
-
-        detail_map: dict[str, object] = {}
-        short_id_map: dict[str, int] = {}
-        if unique_cards:
-            details_results, short_id_results = await asyncio.gather(
-                asyncio.gather(
-                    *[self._planka.get_card(c.id) for c in unique_cards],
-                    return_exceptions=True,
-                ),
-                asyncio.gather(
-                    *[self._mappings.get_or_create_short_id(c.id) for c in unique_cards]
-                ),
-            )
-            for card, detail, short_id in zip(
-                unique_cards, details_results, short_id_results
-            ):
-                detail_map[card.id] = None if isinstance(detail, Exception) else detail
-                short_id_map[card.id] = short_id
-
-        def _make_entry(card: PlankaCard) -> CardEntry:
-            detail = detail_map.get(card.id)
-            assignee = _extract_assignee(detail.description) if detail else None  # type: ignore[union-attr]
-            return CardEntry(
-                short_id=short_id_map[card.id],
-                card_id=card.id,
-                name=card.name,
-                has_images=bool(detail and detail.attachments),  # type: ignore[union-attr]
-                has_other_attachments=bool(detail and detail.has_other_attachments),  # type: ignore[union-attr]
-                assignee=assignee,
-            )
-
-        result: list[tuple[str, list[CardEntry]]] = []
-        for (label, _), cards in zip(sections_cfg, section_card_lists):
-            result.append((label, [_make_entry(c) for c in cards]))
-
-        return result
+        card_lists = await asyncio.gather(
+            *(self._planka.get_cards(list_id) for list_id in sections_cfg)
+        )
+        available_count = len(card_lists[0])
+        entries = await self._card_entries(
+            [card for cards in card_lists for card in cards]
+        )
+        return TodoSections(
+            tuple(entries[:available_count]),
+            tuple(entries[available_count:]),
+        )
 
     async def list_recent_done(self, limit: int = 10) -> list[CardEntry]:
         if not self._settings.planka_done_list_id:
@@ -218,37 +196,35 @@ class PlankaCommandService:
         done_cards = await self._planka.get_cards(self._settings.planka_done_list_id)
         recent_cards = list(reversed(done_cards[-limit:]))
 
-        if not recent_cards:
+        return await self._card_entries(recent_cards)
+
+    async def _card_entries(self, cards: list[PlankaCard]) -> list[CardEntry]:
+        if not cards:
             return []
-
-        details_results, short_id_results = await asyncio.gather(
-            asyncio.gather(
-                *[self._planka.get_card(c.id) for c in recent_cards],
-                return_exceptions=True,
-            ),
-            asyncio.gather(
-                *[self._mappings.get_or_create_short_id(c.id) for c in recent_cards]
-            ),
+        details_results = await asyncio.gather(
+            *(self._planka.get_card(card.id) for card in cards),
+            return_exceptions=True,
         )
-
-        entries: list[CardEntry] = []
-        for card, detail, short_id in zip(
-            recent_cards, details_results, short_id_results
-        ):
-            safe_detail = None if isinstance(detail, Exception) else detail
-            assignee = (
-                _extract_assignee(safe_detail.description) if safe_detail else None
+        short_ids = await self._mappings.get_or_create_short_ids(
+            [card.id for card in cards]
+        )
+        entries = []
+        for card, detail_result in zip(cards, details_results):
+            detail = (
+                None if isinstance(detail_result, Exception) else detail_result
             )
             entries.append(
                 CardEntry(
-                    short_id=short_id,
+                    short_id=short_ids[card.id],
                     card_id=card.id,
                     name=card.name,
-                    has_images=bool(safe_detail and safe_detail.attachments),
-                    has_other_attachments=bool(
-                        safe_detail and safe_detail.has_other_attachments
+                    has_images=bool(
+                        detail and any(att.is_image for att in detail.attachments)
                     ),
-                    assignee=assignee,
+                    has_other_attachments=bool(
+                        detail and detail.has_other_attachments
+                    ),
+                    assignee=_extract_assignee(detail.description) if detail else None,
                 )
             )
         return entries
@@ -326,13 +302,9 @@ class PlankaCommandService:
 
         # Annotate description and assign card member when actor is known
         if actor is not None:
-            telegram_id, telegram_username = actor
-            actor_label = (
-                f"@{telegram_username}" if telegram_username else f"tg:{telegram_id}"
-            )
             new_description = _append_meta_event(
                 card.description,
-                f"Created by {actor_label} ({_now_label()})",
+                f"Created by {_actor_label(actor)} ({_now_label()})",
             )
             try:
                 await self._planka.update_card(card.id, description=new_description)
@@ -405,36 +377,20 @@ class PlankaCommandService:
         )
 
         if actor is not None:
-            telegram_id, telegram_username = actor
-            actor_label = (
-                f"@{telegram_username}" if telegram_username else f"tg:{telegram_id}"
+            event = {
+                self.done_list_id: "Done by",
+                self.doing_list_id: "Taken by:",
+            }.get(target_list_id, "Abandoned by")
+            new_description = _append_meta_event(
+                current_description,
+                f"{event} {_actor_label(actor)} ({_now_label()})",
             )
-
-            # Determine which event label to use based on target list
-            if target_list_id == self._settings.planka_done_list_id:
-                event_line: str | None = f"Done by {actor_label} ({_now_label()})"
-            elif target_list_id == self._settings.planka_doing_list_id:
-                # Skip annotation if the task is already taken by this actor
-                already_taken = _extract_assignee(current_description) == actor_label
-                event_line = (
-                    None
-                    if already_taken
-                    else f"Taken by: {actor_label} ({_now_label()})"
+            try:
+                await self._planka.update_card(card_id, description=new_description)
+            except Exception:
+                logger.exception(
+                    "Failed to annotate description for card %s", card_id
                 )
-            else:
-                event_line = f"Moved back by {actor_label} ({_now_label()})"
-
-            if event_line is None:
-                new_description = current_description
-            else:
-                new_description = _append_meta_event(current_description, event_line)
-            if new_description != current_description:
-                try:
-                    await self._planka.update_card(card_id, description=new_description)
-                except Exception:
-                    logger.exception(
-                        "Failed to annotate description for card %s", card_id
-                    )
 
         return MoveTaskResult(card_id=card_id, card_name=card_name)
 
@@ -466,7 +422,15 @@ class PlankaCommandService:
             description=detail.description,
             task_lists=detail.task_lists,
             attachments=downloaded_attachments,
+            state=self._card_state(detail.list_id),
         )
+
+    def _card_state(self, list_id: str) -> CardState | None:
+        return {
+            self.todo_list_id: CardState.TODO,
+            self.doing_list_id: CardState.DOING,
+            self.done_list_id: CardState.DONE,
+        }.get(list_id)
 
     async def toggle_checklist_item(
         self, task_id: str, is_completed: bool, card_short_id: str

@@ -5,15 +5,22 @@ import html
 import io
 import logging
 import mimetypes
-import random
 import re
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
 from typing import TypeVar
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
 
-from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram import Bot, F, Router
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramNotFound,
+    TelegramRetryAfter,
+)
 from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
 from aiogram.types import (
@@ -27,9 +34,12 @@ from aiogram.types import (
 )
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.db.models import User, UserTier
 from botka.handlers.menu import Btn
 from botka.handlers.user_links import format_telegram_username_link, format_user_link
+from botka.services.planka_action_dispatcher import (
+    LocalActionNotification,
+    PlankaActionDispatcher,
+)
 from botka.services.planka_client import (
     PlankaAttachment,
     PlankaAuthError,
@@ -42,89 +52,86 @@ from botka.services.planka_command_service import (
     AttachFileResult,
     CardDetailResult,
     CardEntry,
+    CardState,
     CreateTodoResult,
     MoveTaskResult,
     PlankaCardNotFoundError,
     PlankaCommandService,
     PlankaListNotConfiguredError,
 )
+from botka.services.planka_notification_service import (
+    CREATE_CARD_ACTION,
+    MOVE_CARD_ACTION,
+)
+from botka.services.planka_todo_publisher import (
+    PlankaTodoPublisher,
+    TodoPublication,
+    TodoView,
+)
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+_TELEGRAM_MAX_CAPTION_LENGTH = 1024
 _ATTACH_MEDIA_GROUP_TTL_SECONDS = 600.0
-_TASK_SHORT_ID_IN_DETAIL_RE = re.compile(r"/(?:take|doing|abandon|done)\s+(\d+)\b")
+_OPEN_CHECKBOX = "◻️"
+_TASK_SHORT_ID_IN_TEXT_RE = re.compile(
+    r"(?:Quest\s+#|/(?:take|doing|abandon|done)\s+)(\d+)\b",
+    re.IGNORECASE,
+)
+_TASK_SHORT_ID_IN_CALLBACK_RE = re.compile(
+    r"^(?:pquest:[^:]+|paction:[^:]+|ptask:[^:]+:[^:]+):(\d+)$"
+)
 
-_QUEST_DONE_EMOJIS = [
-    "🎉",
-    "🌟",
-    "🔥",
-    "🏆",
-    "✨",
-    "🎊",
-    "⭐",
-    "💫",
-    "🎯",
-    "🥳",
-    "🍾",
-    "🪄",
-    "🏅",
-    "💥",
-    "🌈",
-    "🎖️",
-    "🚀",
-    "💎",
-    "👑",
-    "🦾",
-    "⚡",
-    "🌠",
-    "🎆",
-    "🎇",
-    "🪩",
-    "🎀",
-    "🥂",
-    "🍻",
-    "🤩",
-    "😎",
-    "🙌",
-    "👏",
-    "💪",
-    "🫡",
-    "🫶",
-    "❤️‍🔥",
-    "🌺",
-    "🦋",
-    "🐉",
-    "⚔️",
-    "🦄",
-    "🐼",
-    "🦜",
-    "🐈",
-    "🐾",
-    "🇩🇸",
-    "🍷",
-    "🧬",
-    "🛡️",
-    "🍎",
-    "🍋",
-    "🏇",
-    "🧛",
-    "🧙",
-    "🦸",
-    "🦹",
-    "🌍",
-    "🌌",
-    "💧",
-    "☃️",
-    "🍄",
-    "👍",
-    "🧑‍💻",
-    "🛠️",
-]
 _TELEGRAM_USERNAME_RE = re.compile(r"(?<![\w/])@([A-Za-z0-9_]{5,32})\b")
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True, slots=True)
+class _MoveCommandSpec:
+    name: str
+    target: CardState
+    reply: str
+    credit_actor: bool = False
+    completion: bool = False
+
+
+_TAKE_COMMAND = _MoveCommandSpec(
+    "take", CardState.DOING, "⚔️ quest accepted!", credit_actor=True
+)
+_DOING_COMMAND = _MoveCommandSpec(
+    "doing", CardState.DOING, "⚔️ quest accepted!", credit_actor=True
+)
+_ABANDON_COMMAND = _MoveCommandSpec(
+    "abandon", CardState.TODO, "🏳️ quest abandoned."
+)
+_DONE_COMMAND = _MoveCommandSpec("done", CardState.DONE, "", completion=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _QuestActionSpec:
+    target: CardState
+    answer: str
+    completion: bool = False
+
+
+_QUEST_ACTIONS = {
+    "take": _QuestActionSpec(CardState.DOING, "⚔️ Quest accepted!"),
+    "abandon": _QuestActionSpec(CardState.TODO, "🏳️ Quest abandoned."),
+    "done": _QuestActionSpec(CardState.DONE, "Quest completed!", completion=True),
+}
+
+
+def _list_id_for_state(
+    svc: PlankaCommandService, state: CardState
+) -> str | None:
+    return {
+        CardState.TODO: svc.todo_list_id,
+        CardState.DOING: svc.doing_list_id,
+        CardState.DONE: svc.done_list_id,
+    }[state]
 
 
 def _make_card_link(
@@ -148,11 +155,7 @@ _ATTACH_MEDIA_GROUP_LOCK = asyncio.Lock()
 async def _do_boards(
     message: Message,
     svc: PlankaCommandService,
-    user_record: User | None,
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
     if not svc.is_configured:
         await message.reply(
             "Planka integration is not configured.",
@@ -209,11 +212,8 @@ async def _do_boards(
 async def _do_quest_list(
     message: Message,
     svc: PlankaCommandService,
-    user_record: User | None,
+    todo_publisher: PlankaTodoPublisher,
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
     if not svc.is_configured:
         await message.reply(
             "Planka integration is not configured.",
@@ -228,33 +228,26 @@ async def _do_quest_list(
             disable_notification=True,
         )
         return
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
-        sections = await svc.list_todos()
+        view = await todo_publisher.load(svc)
     except (
         PlankaClientError,
         PlankaListNotConfiguredError,
         PlankaCardNotFoundError,
     ) as exc:
-        await loading_msg.delete()
         await _reply_planka_error(message, exc)
         return
-    await loading_msg.delete()
-    available = sections[0][1] if sections else []
-    in_progress = sections[1][1] if len(sections) > 1 else []
-    daily = _pick_daily_quest(available, svc.timezone)
-    await _send_quest_list(
-        message, daily, in_progress, svc.base_url, svc.show_card_links
-    )
-
-
-async def _do_todo_list(
-    message: Message,
-    svc: PlankaCommandService,
-    user_record: User | None,
-) -> None:
-    """Backward-compat wrapper: delegates to quest list."""
-    await _do_quest_list(message, svc, user_record)
+    if message.chat.type == "private":
+        await _send_quest_list(message, view)
+        return
+    if not todo_publisher.has_targets:
+        await message.reply(
+            "Todo topics are not configured.",
+            disable_notification=True,
+        )
+        return
+    publication = await todo_publisher.publish(message.bot, view)
+    await _send_todo_topic_links(message, publication)
 
 
 async def _do_task_input(
@@ -262,12 +255,9 @@ async def _do_task_input(
     text: str,
     svc: PlankaCommandService,
     attachment_cache: PlankaAttachmentCacheService,
-    user_record: User | None,
+    action_dispatcher: PlankaActionDispatcher,
 ) -> None:
     """Handle a task lookup or creation from plain text (used by the FSM dialog)."""
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
     if not svc.is_configured:
         await message.reply(
             "Planka integration is not configured.",
@@ -281,7 +271,9 @@ async def _do_task_input(
             message, task_lookup_input, svc, attachment_cache
         )
         return
-    await _create_todo_from_text(message, text, svc, album=None)
+    await _create_todo_from_text(
+        message, text, svc, action_dispatcher, album=None
+    )
 
 
 @router.message(Command("boards"))
@@ -289,9 +281,8 @@ async def _do_task_input(
 async def boards_command(
     message: Message,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
 ) -> None:
-    await _do_boards(message, svc, user_record)
+    await _do_boards(message, svc)
 
 
 @router.message(F.text == Btn.BOARDS, F.chat.type == "private")
@@ -299,9 +290,8 @@ async def boards_command(
 async def menu_boards_message(
     message: Message,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
 ) -> None:
-    await _do_boards(message, svc, user_record)
+    await _do_boards(message, svc)
 
 
 @router.message(Command("quest"))
@@ -311,15 +301,12 @@ async def quest_command(
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
     attachment_cache: FromDishka[PlankaAttachmentCacheService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
     args = (command.args or "").strip()
     if args:
         task_lookup_input = _parse_task_lookup_input(args)
         if task_lookup_input is not None:
-            if not _can_use_planka(user_record):
-                await _reply_planka_access_denied(message)
-                return
             if not svc.is_configured:
                 await message.reply(
                     "Planka integration is not configured.",
@@ -337,7 +324,7 @@ async def quest_command(
             disable_notification=True,
         )
         return
-    await _do_quest_list(message, svc, user_record)
+    await _do_quest_list(message, svc, todo_publisher)
 
 
 @router.message(Command("todo"))
@@ -347,12 +334,10 @@ async def todo_command(
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
     attachment_cache: FromDishka[PlankaAttachmentCacheService],
+    todo_publisher: FromDishka[PlankaTodoPublisher],
+    action_dispatcher: FromDishka[PlankaActionDispatcher],
     album: list[Message] | None = None,
-    user_record: User | None = None,
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
     if not svc.is_configured:
         await message.reply(
             "Planka integration is not configured.",
@@ -369,7 +354,7 @@ async def todo_command(
         return
     args = (command.args or "").strip()
     if not args:
-        await _do_quest_list(message, svc, user_record)
+        await _do_quest_list(message, svc, todo_publisher)
         return
     task_lookup_input = _parse_task_lookup_input(args)
     if task_lookup_input is not None:
@@ -377,7 +362,7 @@ async def todo_command(
             message, task_lookup_input, svc, attachment_cache
         )
         return
-    await _create_todo_from_text(message, args, svc, album)
+    await _create_todo_from_text(message, args, svc, action_dispatcher, album)
 
 
 @router.message(F.text == Btn.TODO, F.chat.type == "private")
@@ -385,9 +370,73 @@ async def todo_command(
 async def menu_todo_message(
     message: Message,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    await _do_quest_list(message, svc, user_record)
+    await _do_quest_list(message, svc, todo_publisher)
+
+
+async def _run_move_command(
+    message: Message,
+    command: CommandObject,
+    svc: PlankaCommandService,
+    todo_publisher: PlankaTodoPublisher,
+    spec: _MoveCommandSpec,
+) -> None:
+    if not svc.is_configured:
+        await message.reply(
+            "Planka integration is not configured.",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+
+    args = (command.args or "").strip()
+    if not args:
+        await message.reply(
+            f"Usage: /{spec.name} {{id}}",
+            disable_web_page_preview=True,
+            disable_notification=True,
+        )
+        return
+
+    input_id = args.split()[0]
+    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
+    actor = (
+        (message.from_user.id, message.from_user.username)
+        if message.from_user
+        else None
+    )
+    try:
+        result = await svc.move_task(
+            input_id, _list_id_for_state(svc, spec.target), actor=actor
+        )
+        await todo_publisher.refresh_safely(message.bot, svc)
+        await loading_msg.delete()
+        if spec.completion:
+            await _send_quest_done_reply(
+                message,
+                result,
+                svc.base_url,
+                from_user=message.from_user,
+                show_links=svc.show_card_links,
+            )
+        else:
+            await _send_move_reply(
+                message,
+                input_id,
+                result,
+                spec.reply,
+                svc.base_url,
+                from_user=message.from_user if spec.credit_actor else None,
+                show_links=svc.show_card_links,
+            )
+    except (
+        PlankaClientError,
+        PlankaListNotConfiguredError,
+        PlankaCardNotFoundError,
+    ) as exc:
+        await loading_msg.delete()
+        await _reply_planka_error(message, exc)
 
 
 @router.message(Command("take"))
@@ -396,52 +445,9 @@ async def take_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
-    if not svc.is_configured:
-        await message.reply(
-            "Planka integration is not configured.",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    args = (command.args or "").strip()
-    if not args:
-        await message.reply(
-            "Usage: /take {id}",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    input_id = args.split()[0]
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
-    try:
-        actor = (
-            (message.from_user.id, message.from_user.username)
-            if message.from_user
-            else None
-        )
-        result = await svc.move_task(input_id, svc.doing_list_id, actor=actor)
-        await loading_msg.delete()
-        await _send_move_reply(
-            message,
-            input_id,
-            result,
-            "⚔️ quest accepted!",
-            svc.base_url,
-            from_user=message.from_user,
-            show_links=svc.show_card_links,
-        )
-    except (
-        PlankaClientError,
-        PlankaListNotConfiguredError,
-        PlankaCardNotFoundError,
-    ) as exc:
-        await loading_msg.delete()
-        await _reply_planka_error(message, exc)
+    await _run_move_command(message, command, svc, todo_publisher, _TAKE_COMMAND)
 
 
 @router.message(Command("abandon"))
@@ -450,58 +456,9 @@ async def abandon_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
-    if not svc.is_configured:
-        await message.reply(
-            "Planka integration is not configured.",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    if not svc.todo_list_id:
-        await message.reply(
-            "BOTKA_PLANKA_TODO_LIST_ID is not configured.",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    args = (command.args or "").strip()
-    if not args:
-        await message.reply(
-            "Usage: /abandon {id}",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    input_id = args.split()[0]
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
-    try:
-        actor = (
-            (message.from_user.id, message.from_user.username)
-            if message.from_user
-            else None
-        )
-        result = await svc.move_task(input_id, svc.todo_list_id, actor=actor)
-        await loading_msg.delete()
-        await _send_move_reply(
-            message,
-            input_id,
-            result,
-            "🏳️ quest abandoned.",
-            svc.base_url,
-            show_links=svc.show_card_links,
-        )
-    except (
-        PlankaClientError,
-        PlankaListNotConfiguredError,
-        PlankaCardNotFoundError,
-    ) as exc:
-        await loading_msg.delete()
-        await _reply_planka_error(message, exc)
+    await _run_move_command(message, command, svc, todo_publisher, _ABANDON_COMMAND)
 
 
 @router.message(Command("doing"))
@@ -510,52 +467,9 @@ async def doing_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
-    if not svc.is_configured:
-        await message.reply(
-            "Planka integration is not configured.",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    args = (command.args or "").strip()
-    if not args:
-        await message.reply(
-            "Usage: /doing {id}",
-            disable_web_page_preview=True,
-            disable_notification=True,
-        )
-        return
-    input_id = args.split()[0]
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
-    try:
-        actor = (
-            (message.from_user.id, message.from_user.username)
-            if message.from_user
-            else None
-        )
-        result = await svc.move_task(input_id, svc.doing_list_id, actor=actor)
-        await loading_msg.delete()
-        await _send_move_reply(
-            message,
-            input_id,
-            result,
-            "⚔️ quest accepted!",
-            svc.base_url,
-            from_user=message.from_user,
-            show_links=svc.show_card_links,
-        )
-    except (
-        PlankaClientError,
-        PlankaListNotConfiguredError,
-        PlankaCardNotFoundError,
-    ) as exc:
-        await loading_msg.delete()
-        await _reply_planka_error(message, exc)
+    await _run_move_command(message, command, svc, todo_publisher, _DOING_COMMAND)
 
 
 @router.message(Command("done"))
@@ -564,10 +478,10 @@ async def done_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
+    if (command.args or "").strip():
+        await _run_move_command(message, command, svc, todo_publisher, _DONE_COMMAND)
         return
     if not svc.is_configured:
         await message.reply(
@@ -576,30 +490,15 @@ async def done_command(
             disable_notification=True,
         )
         return
-    args = (command.args or "").strip()
     loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
-        if not args:
-            done_entries = await svc.list_recent_done(limit=10)
-            await loading_msg.delete()
-            await _send_todo_list(
-                message, [("DONE", done_entries)], svc.base_url, svc.show_card_links
-            )
-            return
-        input_id = args.split()[0]
-        actor = (
-            (message.from_user.id, message.from_user.username)
-            if message.from_user
-            else None
-        )
-        result = await svc.move_task(input_id, svc.done_list_id, actor=actor)
+        done_entries = await svc.list_recent_done(limit=10)
         await loading_msg.delete()
-        await _send_quest_done_celebration(
+        await _send_todo_list(
             message,
-            result,
+            [("DONE", done_entries)],
             svc.base_url,
-            from_user=message.from_user,
-            show_links=svc.show_card_links,
+            svc.show_card_links,
         )
     except (
         PlankaClientError,
@@ -617,12 +516,9 @@ async def task_command(
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
     attachment_cache: FromDishka[PlankaAttachmentCacheService],
+    action_dispatcher: FromDishka[PlankaActionDispatcher],
     album: list[Message] | None = None,
-    user_record: User | None = None,
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
     if not svc.is_configured:
         await message.reply(
             "Planka integration is not configured.",
@@ -651,7 +547,7 @@ async def task_command(
             disable_notification=True,
         )
         return
-    await _create_todo_from_text(message, args, svc, album)
+    await _create_todo_from_text(message, args, svc, action_dispatcher, album)
 
 
 @router.message(Command("attach"))
@@ -660,11 +556,8 @@ async def attach_command(
     message: Message,
     command: CommandObject,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    if not _can_use_planka(user_record):
-        await _reply_planka_access_denied(message)
-        return
     if not svc.is_configured:
         await message.reply(
             "Planka integration is not configured.",
@@ -673,9 +566,13 @@ async def attach_command(
         )
         return
     args = (command.args or "").strip()
-    if not args:
+    input_id = args.split()[0] if args else None
+    if input_id is None and message.reply_to_message is not None:
+        input_id = _extract_task_short_id_from_message(message.reply_to_message)
+    if input_id is None:
         await message.reply(
-            "Usage: /attach {id} (send with file or reply to a message with file)",
+            "Send a file with /attach while replying to a quest message, "
+            "or use /attach {id}.",
             disable_web_page_preview=True,
             disable_notification=True,
         )
@@ -683,13 +580,12 @@ async def attach_command(
     payloads = await _download_attachment_payloads(message)
     if not payloads:
         await message.reply(
-            "No attachment found. Send /attach {id} with a file or reply to a file message.",
+            "No attachment found. Send a file with /attach or reply to a file message.",
             disable_web_page_preview=True,
             disable_notification=True,
         )
         return
 
-    input_id = args.split()[0]
     loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         result, uploaded_count = await _attach_payloads_to_task(svc, input_id, payloads)
@@ -702,6 +598,7 @@ async def attach_command(
     await _send_attach_reply(
         message, input_id, result, svc.base_url, uploaded_count, svc.show_card_links
     )
+    await todo_publisher.refresh_safely(message.bot, svc)
 
 
 @router.message(
@@ -728,10 +625,8 @@ async def attach_command(
 async def reply_attach_to_task_handler(
     message: Message,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
-    if not _can_use_planka(user_record):
-        return
     if not svc.is_configured:
         return
     if message.text and message.text.startswith("/"):
@@ -761,6 +656,7 @@ async def reply_attach_to_task_handler(
     await _send_attach_reply(
         message, input_id, result, svc.base_url, uploaded_count, svc.show_card_links
     )
+    await todo_publisher.refresh_safely(message.bot, svc)
 
 
 @router.callback_query(F.data.startswith("ptask:"))
@@ -768,16 +664,10 @@ async def reply_attach_to_task_handler(
 async def checklist_toggle_callback(
     callback: CallbackQuery,
     svc: FromDishka[PlankaCommandService],
-    user_record: User | None = None,
+    action_dispatcher: FromDishka[PlankaActionDispatcher],
 ) -> None:
     if callback.message is None or callback.data is None:
         await callback.answer()
-        return
-    if not _can_use_planka(user_record):
-        await callback.answer(
-            "Only residents and members can go on quests.",
-            show_alert=True,
-        )
         return
     parts = callback.data.split(":", 3)
     if len(parts) != 4:
@@ -785,6 +675,7 @@ async def checklist_toggle_callback(
         return
     _, task_id, new_val_str, short_id_str = parts
     is_completed = new_val_str == "1"
+    await callback.answer()
     actor = (
         (callback.from_user.id, callback.from_user.username)
         if callback.from_user
@@ -792,8 +683,14 @@ async def checklist_toggle_callback(
     )
     try:
         detail = await svc.toggle_checklist_item(task_id, is_completed, short_id_str)
-        # Moving a checklist item to done also moves the card to "in progress"
-        if is_completed and svc.doing_list_id:
+        # The first completed item accepts an available quest. Further checklist
+        # changes must not move it again or append duplicate assignment metadata.
+        if (
+            is_completed
+            and detail is not None
+            and detail.state == CardState.TODO
+            and svc.doing_list_id
+        ):
             try:
                 await svc.move_task(short_id_str, svc.doing_list_id, actor=actor)
                 detail = await svc.get_card_detail(short_id_str)
@@ -803,25 +700,128 @@ async def checklist_toggle_callback(
                 PlankaCardNotFoundError,
             ):
                 pass  # non-fatal; checklist was still toggled
-    except PlankaClientError:
-        await callback.answer("Planka request failed.", show_alert=True)
+    except PlankaClientError as exc:
+        await _reply_planka_error(callback.message, exc)
         return
     if not detail:
-        await callback.answer("Task not found.", show_alert=True)
+        await callback.message.reply("Task not found.", disable_notification=True)
         return
+    action_dispatcher.dispatch(callback.bot)
     full_text = _build_card_detail_text(detail)
     keyboard = _build_checklist_keyboard(detail)
     try:
-        await callback.message.edit_text(
-            full_text,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-            disable_web_page_preview=True,
-        )
+        await _edit_task_message(callback.message, full_text, keyboard)
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             logger.warning("Failed to update checklist message: %s", exc)
-    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pquest:"))
+@inject
+async def quest_list_callback(
+    callback: CallbackQuery,
+    svc: FromDishka[PlankaCommandService],
+    attachment_cache: FromDishka[PlankaAttachmentCacheService],
+) -> None:
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3 or parts[1] not in {"take", "view"}:
+        await callback.answer("Invalid quest action.", show_alert=True)
+        return
+    _, _, short_id = parts
+
+    try:
+        detail = await svc.get_card_detail(short_id)
+        if detail is None:
+            await callback.answer("Quest not found.", show_alert=True)
+            return
+        attachments_complete = await _send_card_detail_to_private(
+            callback.bot,
+            callback.from_user.id,
+            detail,
+            attachment_cache,
+        )
+        if attachments_complete:
+            await callback.answer("📬 Quest details sent privately.")
+        else:
+            await callback.answer(
+                "Quest details were sent privately, but some attachments failed.",
+                show_alert=True,
+            )
+    except (
+        PlankaClientError,
+        PlankaListNotConfiguredError,
+        PlankaCardNotFoundError,
+    ) as exc:
+        await _answer_planka_callback_error(callback, exc)
+    except Exception as exc:
+        await _answer_private_delivery_error(callback, exc)
+
+
+@router.callback_query(F.data.startswith("paction:"))
+@inject
+async def quest_action_callback(
+    callback: CallbackQuery,
+    svc: FromDishka[PlankaCommandService],
+    action_dispatcher: FromDishka[PlankaActionDispatcher],
+) -> None:
+    if callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+    parts = callback.data.split(":", 2)
+    action_spec = _QUEST_ACTIONS.get(parts[1]) if len(parts) == 3 else None
+    if action_spec is None:
+        await callback.answer("Invalid quest action.", show_alert=True)
+        return
+    _, _, short_id = parts
+
+    actor = (callback.from_user.id, callback.from_user.username)
+    await callback.answer(action_spec.answer)
+
+    try:
+        result = await svc.move_task(
+            short_id, _list_id_for_state(svc, action_spec.target), actor=actor
+        )
+        if action_spec.completion:
+            completion_text = _build_quest_done_text(
+                result,
+                svc.base_url,
+                callback.from_user,
+                svc.show_card_links,
+            )
+            action_dispatcher.dispatch(
+                callback.bot,
+                LocalActionNotification(
+                    completion_text,
+                    MOVE_CARD_ACTION,
+                    result.card_id,
+                ),
+            )
+            await _edit_task_message(
+                callback.message,
+                completion_text,
+                None,
+            )
+            return
+
+        action_dispatcher.dispatch(callback.bot)
+        detail = await svc.get_card_detail(short_id)
+        if detail is None:
+            logger.warning("Moved quest %s but could not reload its details", short_id)
+            return
+        await _edit_task_message(
+            callback.message,
+            _build_card_detail_text(detail),
+            _build_checklist_keyboard(detail),
+        )
+    except (
+        PlankaClientError,
+        PlankaListNotConfiguredError,
+        PlankaCardNotFoundError,
+    ) as exc:
+        await _reply_planka_error(callback.message, exc)
 
 
 @router.message(F.photo, F.media_group_id.is_not(None))
@@ -829,6 +829,7 @@ async def checklist_toggle_callback(
 async def album_continuation_handler(
     message: Message,
     svc: FromDishka[PlankaCommandService],
+    todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
     """Upload photos from album messages 2+ to the card created by the /todo handler."""
     if not message.media_group_id or not message.photo:
@@ -847,9 +848,11 @@ async def album_continuation_handler(
     photo = message.photo[-1]
     photo_bytes = await _download_photo_bytes(message, photo)
     if photo_bytes:
-        await svc.upload_album_photo(
+        uploaded = await svc.upload_album_photo(
             card_id, f"{photo.file_unique_id}.jpg", photo_bytes
         )
+        if uploaded:
+            await todo_publisher.refresh_safely(message.bot, svc)
 
 
 @router.message(F.media_group_id)
@@ -878,25 +881,6 @@ async def track_media_group_messages_for_attach(
         uniq = {m.message_id: m for m in messages}
         ordered = [uniq[mid] for mid in sorted(uniq)]
         _ATTACH_MEDIA_GROUP_CACHE[key] = (now, ordered)
-
-
-# --- Presentation helpers ---
-
-
-def _can_use_planka(user_record: User | None) -> bool:
-    return True
-
-
-def _pick_daily_quest(entries: list[CardEntry], tz_name: str) -> CardEntry | None:
-    """Return one deterministically-random quest per calendar day (same for all users)."""
-    if not entries:
-        return None
-    from datetime import datetime
-
-    today = datetime.now(ZoneInfo(tz_name)).date()
-    sorted_entries = sorted(entries, key=lambda e: e.card_id)
-    rng = random.Random(today.toordinal())
-    return rng.choice(sorted_entries)
 
 
 def _parse_task_lookup_input(args: str) -> str | None:
@@ -936,16 +920,43 @@ async def _send_task_detail_for_input(
         )
         return
     await loading_msg.delete()
-    await _send_card_detail(message, detail, attachment_cache)
+    if message.from_user is None:
+        await message.reply(
+            "I could not determine where to send the private message.",
+            disable_notification=True,
+        )
+        return
+    try:
+        attachments_complete = await _send_card_detail_to_private(
+            message.bot,
+            message.from_user.id,
+            detail,
+            attachment_cache,
+        )
+    except Exception as exc:
+        await _reply_private_delivery_error(message, exc)
+        return
+
+    is_private = getattr(getattr(message, "chat", None), "type", None) == "private"
+    if not attachments_complete:
+        await message.reply(
+            "Quest details were sent privately, but some attachments could not be delivered.",
+            disable_notification=True,
+        )
+    elif not is_private:
+        await message.reply(
+            "📬 Quest details sent to you privately.",
+            disable_notification=True,
+        )
 
 
 async def _create_todo_from_text(
     message: Message,
     args: str,
     svc: PlankaCommandService,
+    action_dispatcher: PlankaActionDispatcher,
     album: list[Message] | None = None,
 ) -> None:
-    loading_msg = await message.reply("⏳ Loading…", disable_notification=True)
     try:
         card_name, card_description, checklist_groups = _parse_todo_args(args)
         album_messages = album or [message]
@@ -980,30 +991,36 @@ async def _create_todo_from_text(
                 )
             if extra_uploads:
                 upload_results = await asyncio.gather(*extra_uploads)
-                result.attachment_count += sum(1 for ok in upload_results if ok)
+                result = replace(
+                    result,
+                    attachment_count=result.attachment_count
+                    + sum(1 for ok in upload_results if ok),
+                )
 
-        await loading_msg.delete()
         await message.reply(
             _build_create_reply(result, svc.base_url, svc.show_card_links),
             parse_mode="HTML",
             disable_web_page_preview=True,
             disable_notification=True,
         )
+        action_dispatcher.dispatch(
+            message.bot,
+            LocalActionNotification(
+                _build_new_quest_notification(
+                    result,
+                    svc.base_url,
+                    svc.show_card_links,
+                ),
+                CREATE_CARD_ACTION,
+                result.card_id,
+            ),
+        )
     except (
         PlankaClientError,
         PlankaListNotConfiguredError,
         PlankaCardNotFoundError,
     ) as exc:
-        await loading_msg.delete()
         await _reply_planka_error(message, exc)
-
-
-async def _reply_planka_access_denied(message: Message) -> None:
-    await message.reply(
-        "Only residents and members can go on quests.",
-        disable_web_page_preview=True,
-        disable_notification=True,
-    )
 
 
 async def _reply_planka_error(message: Message, exc: Exception) -> None:
@@ -1034,43 +1051,95 @@ async def _reply_planka_error(message: Message, exc: Exception) -> None:
         )
 
 
+async def _answer_planka_callback_error(
+    callback: CallbackQuery, exc: Exception
+) -> None:
+    if isinstance(exc, PlankaAuthError):
+        text = "Planka authentication failed."
+    elif isinstance(exc, PlankaCardNotFoundError):
+        text = "Quest not found."
+    elif isinstance(exc, PlankaListNotConfiguredError):
+        text = "The target list is not configured."
+    else:
+        logger.exception("Planka callback request failed")
+        text = "Planka request failed. Please try again."
+    await callback.answer(text, show_alert=True)
+
+
+def _private_delivery_error_text(exc: Exception) -> str:
+    if isinstance(exc, (TelegramForbiddenError, TelegramNotFound)):
+        return (
+            "I can't message you privately. Open the bot's private chat, press Start, "
+            "and make sure the bot is not blocked."
+        )
+    if isinstance(exc, TelegramBadRequest):
+        return (
+            "I couldn't open your private chat. Open the bot privately and press Start, "
+            "then try again."
+        )
+    if isinstance(exc, TelegramRetryAfter):
+        return "Telegram is rate-limiting messages right now. Please try again shortly."
+    if isinstance(exc, TelegramNetworkError):
+        return "Telegram is temporarily unreachable. Please try again."
+    return "I couldn't send the quest privately. Please try again."
+
+
+async def _answer_private_delivery_error(
+    callback: CallbackQuery, exc: Exception
+) -> None:
+    if not isinstance(exc, TelegramAPIError):
+        logger.exception("Unexpected private quest delivery failure")
+    else:
+        logger.warning("Private quest delivery failed: %s", exc)
+    await callback.answer(_private_delivery_error_text(exc), show_alert=True)
+
+
+async def _reply_private_delivery_error(message: Message, exc: Exception) -> None:
+    if not isinstance(exc, TelegramAPIError):
+        logger.exception("Unexpected private quest delivery failure")
+    else:
+        logger.warning("Private quest delivery failed: %s", exc)
+    await message.reply(
+        _private_delivery_error_text(exc),
+        disable_web_page_preview=True,
+        disable_notification=True,
+    )
+
+
 async def _send_quest_list(
     message: Message,
-    daily: CardEntry | None,
-    in_progress: list[CardEntry],
-    base_url: str,
-    show_links: bool = True,
+    view: TodoView,
 ) -> None:
-    all_lines: list[str] = []
+    await message.reply(
+        view.text,
+        parse_mode="HTML",
+        reply_markup=view.keyboard,
+        disable_web_page_preview=True,
+        disable_notification=True,
+    )
 
-    all_lines.append("✨ <b>Quest of the Day</b> ✨")
-    if daily:
-        link = _make_card_link(daily.name, daily.card_id, base_url, show_links)
-        emojis = (" 🖼" if daily.has_images else "") + (
-            " 📎" if daily.has_other_attachments else ""
+
+async def _send_todo_topic_links(
+    message: Message, publication: TodoPublication
+) -> None:
+    if publication.links:
+        lines = [
+            f'📌 <a href="{html.escape(link)}">Open the pinned todo list</a>'
+            for link in publication.links
+        ]
+        await message.reply(
+            "\n".join(lines),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            disable_notification=True,
         )
-        all_lines.append(f"  {daily.short_id} {link}{emojis}")
-    else:
-        all_lines.append("  No quests available.")
-    all_lines.append("")
-
-    if in_progress:
-        all_lines.append("⚔️ <b>Active Quests</b>")
-        for entry in in_progress:
-            link = _make_card_link(entry.name, entry.card_id, base_url, show_links)
-            emojis = (" 🖼" if entry.has_images else "") + (
-                " 📎" if entry.has_other_attachments else ""
-            )
-            assignee_part = (
-                f" · taken by {_escape_html_with_telegram_links(entry.assignee)}"
-                if entry.assignee
-                else ""
-            )
-            all_lines.append(f"  {entry.short_id} {link}{emojis}{assignee_part}")
-        all_lines.append("")
-
-    all_lines.append("<i>/quest {id} — view details · /take {id} — accept quest</i>")
-    await _reply_chunked(message, all_lines)
+        return
+    text = (
+        "The pinned todo list was updated in the configured todo topic."
+        if publication.published
+        else "I couldn't update the pinned todo list. Please try again later."
+    )
+    await message.reply(text, disable_notification=True)
 
 
 async def _send_todo_list(
@@ -1127,29 +1196,34 @@ async def _send_move_reply(
     )
 
 
-async def _send_quest_done_celebration(
+async def _send_quest_done_reply(
     message: Message,
     result: MoveTaskResult,
     base_url: str,
     from_user: object = None,
     show_links: bool = True,
 ) -> None:
-    rng = random.Random()
-    prefix = "".join(rng.choices(_QUEST_DONE_EMOJIS, k=rng.randint(1, 2)))
-    suffix = "".join(rng.choices(_QUEST_DONE_EMOJIS, k=rng.randint(1, 2)))
-    link = _make_card_link(result.card_name, result.card_id, base_url, show_links)
-    from aiogram.types import User as _AiogramUser
-
-    if isinstance(from_user, _AiogramUser):
-        text = f"{prefix} {format_user_link(from_user)} completed the quest {link} {suffix}"
-    else:
-        text = f"{prefix} Quest complete! {link} {suffix}"
+    text = _build_quest_done_text(result, base_url, from_user, show_links)
     await message.reply(
         text,
         parse_mode="HTML",
         disable_web_page_preview=True,
         disable_notification=True,
     )
+
+
+def _build_quest_done_text(
+    result: MoveTaskResult,
+    base_url: str,
+    from_user: object = None,
+    show_links: bool = True,
+) -> str:
+    link = _make_card_link(result.card_name, result.card_id, base_url, show_links)
+    from aiogram.types import User as _AiogramUser
+
+    if isinstance(from_user, _AiogramUser):
+        return f"✅ {format_user_link(from_user)} completed the quest {link}"
+    return f"✅ Quest complete: {link}"
 
 
 async def _send_attach_reply(
@@ -1178,41 +1252,130 @@ async def _attach_payloads_to_task(
     first_name, first_bytes = payloads[0]
     result = await svc.attach_file(input_id, first_name, first_bytes)
     uploaded_count = 1
-    if len(payloads) > 1:
-        upload_results = await asyncio.gather(
-            *[svc.attach_file(input_id, name, data) for name, data in payloads[1:]],
-            return_exceptions=True,
-        )
-        uploaded_count += sum(1 for r in upload_results if not isinstance(r, Exception))
+    for name, data in payloads[1:]:
+        try:
+            await svc.attach_file(input_id, name, data)
+        except Exception:
+            logger.exception("Failed to attach %s to card %s", name, result.card_id)
+        else:
+            uploaded_count += 1
     return result, uploaded_count
 
 
 def _extract_task_short_id_from_message(message: Message) -> str | None:
-    text = message.text or message.caption or ""
-    match = _TASK_SHORT_ID_IN_DETAIL_RE.search(text)
-    return match.group(1) if match else None
+    text = getattr(message, "text", None) or getattr(message, "caption", None) or ""
+    match = _TASK_SHORT_ID_IN_TEXT_RE.search(text)
+    if match:
+        return match.group(1)
+
+    markup = getattr(message, "reply_markup", None)
+    for row in getattr(markup, "inline_keyboard", ()):
+        for button in row:
+            callback_data = getattr(button, "callback_data", None) or ""
+            match = _TASK_SHORT_ID_IN_CALLBACK_RE.fullmatch(callback_data)
+            if match:
+                return match.group(1)
+    return None
 
 
-async def _send_card_detail(
-    message: Message,
+async def _send_card_detail_to_private(
+    bot: Bot,
+    user_id: int,
     detail: CardDetailResult,
     attachment_cache: PlankaAttachmentCacheService,
-) -> None:
+) -> bool:
     full_text = _build_card_detail_text(detail)
     keyboard = _build_checklist_keyboard(detail)
-    await message.reply(
-        full_text,
+    attachments_complete = await _send_attachment_groups(
+        bot, user_id, detail.attachments, attachment_cache
+    )
+    await bot.send_message(
+        chat_id=user_id,
+        text=full_text,
         parse_mode="HTML",
         reply_markup=keyboard,
         disable_web_page_preview=True,
         disable_notification=True,
     )
-    await _send_attachment_groups(message, detail.attachments, attachment_cache)
+    return attachments_complete
+
+
+async def _edit_task_message(
+    message: Message,
+    text: str,
+    keyboard: InlineKeyboardMarkup | None,
+) -> None:
+    if getattr(message, "text", None) is not None:
+        await message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        return
+    if len(text) <= _TELEGRAM_MAX_CAPTION_LENGTH:
+        await message.edit_caption(
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+        return
+
+    await message.edit_reply_markup(reply_markup=None)
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+        disable_notification=True,
+    )
 
 
 def _attachment_cache_key(attachment: PlankaAttachment) -> str:
     # Planka attachment IDs are stable for unchanged files.
     return attachment.id
+
+
+async def _send_cached_media(
+    attachment_cache: PlankaAttachmentCacheService,
+    cache_key: str,
+    cached_file_id: str | None,
+    data: bytes,
+    filename: str,
+    send: Callable[[str | BufferedInputFile], Awaitable[Message]],
+    valid: Callable[[Message], bool],
+) -> Message | None:
+    async def _upload() -> Message:
+        return await send(BufferedInputFile(data, filename=filename))
+
+    try:
+        sent = await send(cached_file_id) if cached_file_id else await _upload()
+    except (TelegramForbiddenError, TelegramNotFound):
+        raise
+    except TelegramBadRequest:
+        if not cached_file_id:
+            logger.exception("Failed to send quest attachment: %s", filename)
+            return None
+        sent = None
+    except Exception:
+        logger.exception("Failed to send quest attachment: %s", filename)
+        return None
+
+    if sent is not None and valid(sent):
+        return sent
+    if not cached_file_id:
+        logger.warning("Telegram rejected quest attachment format: %s", filename)
+        return None
+
+    await attachment_cache.clear_file_id(cache_key)
+    try:
+        sent = await _upload()
+    except (TelegramForbiddenError, TelegramNotFound):
+        raise
+    except Exception:
+        logger.exception("Failed to resend quest attachment: %s", filename)
+        return None
+    return sent if valid(sent) else None
 
 
 def _chunk_items(items: list[T], size: int) -> list[list[T]]:
@@ -1236,12 +1399,13 @@ def _is_ogg_payload(data: bytes) -> bool:
 
 
 async def _send_attachment_groups(
-    message: Message,
+    bot: Bot,
+    user_id: int,
     attachments: list[tuple[PlankaAttachment, bytes]],
     attachment_cache: PlankaAttachmentCacheService,
-) -> None:
+) -> bool:
     if not attachments:
-        return
+        return True
 
     image_items = [item for item in attachments if item[0].is_image]
     voice_items = [
@@ -1253,21 +1417,33 @@ async def _send_attachment_groups(
     document_items = [
         item
         for item in attachments
-        if not item[0].is_image and not _is_voice_attachment(item[0])
+        if not item[0].is_image
+        and not (_is_voice_attachment(item[0]) or _is_ogg_payload(item[1]))
     ]
 
+    complete = True
     for chunk in _chunk_items(image_items, 10):
-        await _send_attachment_chunk(
-            message, chunk, attachment_cache, media_kind="image"
+        complete = (
+            await _send_attachment_chunk(
+                bot, user_id, chunk, attachment_cache, media_kind="image"
+            )
+            and complete
         )
     for item in voice_items:
-        await _send_attachment_chunk(
-            message, [item], attachment_cache, media_kind="voice"
+        complete = (
+            await _send_attachment_chunk(
+                bot, user_id, [item], attachment_cache, media_kind="voice"
+            )
+            and complete
         )
     for chunk in _chunk_items(document_items, 10):
-        await _send_attachment_chunk(
-            message, chunk, attachment_cache, media_kind="document"
+        complete = (
+            await _send_attachment_chunk(
+                bot, user_id, chunk, attachment_cache, media_kind="document"
+            )
+            and complete
         )
+    return complete
 
 
 def _is_voice_attachment(attachment: PlankaAttachment) -> bool:
@@ -1289,80 +1465,75 @@ def _is_voice_attachment(attachment: PlankaAttachment) -> bool:
     )
 
 
+async def _send_single_attachment(
+    bot: Bot,
+    user_id: int,
+    item: tuple[PlankaAttachment, bytes],
+    attachment_cache: PlankaAttachmentCacheService,
+) -> bool:
+    attachment, data = item
+    cache_key = _attachment_cache_key(attachment)
+    cached_file_id = await attachment_cache.get_file_id(cache_key)
+    filename = attachment.name or (
+        "image.jpg" if attachment.is_image else "attachment.bin"
+    )
+    is_voice = not attachment.is_image and (
+        _is_voice_attachment(attachment) or _is_ogg_payload(data)
+    )
+
+    async def _send(media: str | BufferedInputFile) -> Message:
+        common = {"disable_notification": True}
+        if attachment.is_image:
+            return await bot.send_photo(chat_id=user_id, photo=media, **common)
+        if is_voice:
+            return await bot.send_voice(chat_id=user_id, voice=media, **common)
+        return await bot.send_document(chat_id=user_id, document=media, **common)
+
+    def _valid(message: Message) -> bool:
+        if attachment.is_image:
+            return bool(message.photo)
+        if is_voice:
+            return message.voice is not None
+        return message.document is not None
+
+    sent_message = await _send_cached_media(
+        attachment_cache,
+        cache_key,
+        cached_file_id,
+        data,
+        filename,
+        _send,
+        _valid,
+    )
+    if sent_message is None:
+        return False
+
+    if attachment.is_image and sent_message.photo:
+        await attachment_cache.set_file_id(cache_key, sent_message.photo[-1].file_id)
+    elif is_voice and sent_message.voice:
+        await attachment_cache.set_file_id(cache_key, sent_message.voice.file_id)
+    elif not attachment.is_image and sent_message.document:
+        await attachment_cache.set_file_id(cache_key, sent_message.document.file_id)
+    return True
+
+
 async def _send_attachment_chunk(
-    message: Message,
+    bot: Bot,
+    user_id: int,
     chunk: list[tuple[PlankaAttachment, bytes]],
     attachment_cache: PlankaAttachmentCacheService,
     *,
     media_kind: str,
-) -> None:
+) -> bool:
     if not chunk:
-        return
+        return True
+    if len(chunk) == 1:
+        return await _send_single_attachment(
+            bot, user_id, chunk[0], attachment_cache
+        )
 
     cache_keys = [_attachment_cache_key(att) for att, _ in chunk]
-    cached_ids = await asyncio.gather(
-        *[attachment_cache.get_file_id(k) for k in cache_keys]
-    )
-
-    if media_kind == "voice":
-        for (attachment, data), cache_key, cached_file_id in zip(
-            chunk, cache_keys, cached_ids
-        ):
-            filename = attachment.name or "voice.ogg"
-            used_cached = bool(cached_file_id)
-            try:
-                sent_message = await message.answer_voice(
-                    voice=cached_file_id or BufferedInputFile(data, filename=filename),
-                    disable_notification=True,
-                )
-            except TelegramBadRequest:
-                if not cached_file_id:
-                    logger.exception(
-                        "Failed to send .ogg attachment as voice: %s", filename
-                    )
-                    continue
-                await attachment_cache.clear_file_id(cache_key)
-                try:
-                    sent_message = await message.answer_voice(
-                        voice=BufferedInputFile(data, filename=filename),
-                        disable_notification=True,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to send .ogg attachment as voice: %s", filename
-                    )
-                    continue
-            except Exception:
-                logger.exception(
-                    "Failed to send .ogg attachment as voice: %s", filename
-                )
-                continue
-
-            # A stale cached id can return a non-voice message without raising.
-            if used_cached and not sent_message.voice:
-                await attachment_cache.clear_file_id(cache_key)
-                try:
-                    sent_message = await message.answer_voice(
-                        voice=BufferedInputFile(data, filename=filename),
-                        disable_notification=True,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to resend .ogg attachment as voice after cache clear: %s",
-                        filename,
-                    )
-                    continue
-
-            if sent_message.voice:
-                await attachment_cache.set_file_id(
-                    cache_key, sent_message.voice.file_id
-                )
-            else:
-                logger.warning(
-                    "sendVoice returned non-voice message for attachment %s (mime may be unsupported for voice)",
-                    filename,
-                )
-        return
+    cached_ids = [await attachment_cache.get_file_id(k) for k in cache_keys]
 
     def _build_media(use_cache: bool) -> list[InputMediaPhoto | InputMediaDocument]:
         media: list[InputMediaPhoto | InputMediaDocument] = []
@@ -1383,17 +1554,29 @@ async def _send_attachment_chunk(
         return media
 
     try:
-        sent_messages = await message.answer_media_group(media=_build_media(use_cache=True), disable_notification=True)  # type: ignore[arg-type]
+        sent_messages = await bot.send_media_group(
+            chat_id=user_id,
+            media=_build_media(use_cache=True),
+            disable_notification=True,
+        )
+    except (TelegramForbiddenError, TelegramNotFound):
+        raise
     except TelegramBadRequest:
         # A stale file_id can fail the whole group; clear cached ids and retry once with uploads.
         for key, cached_file_id in zip(cache_keys, cached_ids):
             if cached_file_id:
                 await attachment_cache.clear_file_id(key)
         try:
-            sent_messages = await message.answer_media_group(media=_build_media(use_cache=False), disable_notification=True)  # type: ignore[arg-type]
+            sent_messages = await bot.send_media_group(
+                chat_id=user_id,
+                media=_build_media(use_cache=False),
+                disable_notification=True,
+            )
+        except (TelegramForbiddenError, TelegramNotFound):
+            raise
         except Exception:
             logger.exception("Failed to send attachment chunk (%s)", media_kind)
-            return
+            return False
 
     for (attachment, _), sent_message in zip(chunk, sent_messages):
         cache_key = _attachment_cache_key(attachment)
@@ -1403,6 +1586,7 @@ async def _send_attachment_chunk(
             )
         if media_kind == "document" and sent_message.document:
             await attachment_cache.set_file_id(cache_key, sent_message.document.file_id)
+    return True
 
 
 def _build_card_detail_text(detail: CardDetailResult) -> str:
@@ -1417,25 +1601,62 @@ def _build_card_detail_text(detail: CardDetailResult) -> str:
         parts.append("")
         for ln in meta_lines:
             parts.append(f"  {_escape_html_with_telegram_links(_md_unescape(ln))}")
-    parts.append(
-        f"<i>/take {detail.short_id} · /abandon {detail.short_id} · /done {detail.short_id}</i>"
-    )
     return "\n".join(parts)
 
 
 def _build_checklist_keyboard(detail: CardDetailResult) -> InlineKeyboardMarkup | None:
     all_tasks = [t for tl in detail.task_lists for t in tl.tasks]
-    if not all_tasks:
-        return None
     buttons = [
         [
             InlineKeyboardButton(
-                text=("✅ " if t.is_completed else "☑ ") + t.name[:60],
+                text=("✅ " if t.is_completed else f"{_OPEN_CHECKBOX} ")
+                + t.name[:60],
                 callback_data=f"ptask:{t.id}:{0 if t.is_completed else 1}:{detail.short_id}",
             )
         ]
         for t in all_tasks
     ]
+    if detail.state == CardState.TODO:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="⚔️ Take quest",
+                    callback_data=f"paction:take:{detail.short_id}",
+                )
+            ]
+        )
+    elif detail.state == CardState.DOING:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="🏳️ Abandon",
+                    callback_data=f"paction:abandon:{detail.short_id}",
+                ),
+                InlineKeyboardButton(
+                    text="✅ Mark done",
+                    callback_data=f"paction:done:{detail.short_id}",
+                ),
+            ]
+        )
+    elif detail.state is None:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="⚔️ Take",
+                    callback_data=f"paction:take:{detail.short_id}",
+                ),
+                InlineKeyboardButton(
+                    text="🏳️ Abandon",
+                    callback_data=f"paction:abandon:{detail.short_id}",
+                ),
+                InlineKeyboardButton(
+                    text="✅ Mark done",
+                    callback_data=f"paction:done:{detail.short_id}",
+                ),
+            ]
+        )
+    if not buttons:
+        return None
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -1445,7 +1666,7 @@ def _format_task_list(tl: PlankaTaskList) -> list[str]:
     title = _escape_html_with_telegram_links(tl.name or "Checklist")
     lines = [f"\n  <b>{title}:</b>"]
     for t in tl.tasks:
-        prefix = "✅" if t.is_completed else "☑"
+        prefix = "✅" if t.is_completed else _OPEN_CHECKBOX
         lines.append(f"  {prefix} {_escape_html_with_telegram_links(t.name)}")
     return lines
 
@@ -1482,6 +1703,15 @@ def _build_create_reply(
     suffix = f" ({', '.join(parts)})" if parts else ""
     card_ref = _make_card_link(result.card_name, result.card_id, base_url, show_links)
     return f"📜 Quest #{result.short_id} created: {card_ref}{suffix}"
+
+
+def _build_new_quest_notification(
+    result: CreateTodoResult,
+    base_url: str,
+    show_links: bool = True,
+) -> str:
+    link = _make_card_link(result.card_name, result.card_id, base_url, show_links)
+    return f"📜 New quest: {link}"
 
 
 def _parse_todo_args(args: str) -> tuple[str, str, list[tuple[str, list[str]]]]:
@@ -1634,14 +1864,6 @@ async def _download_single_attachment_payload(
         data = await _download_telegram_file_bytes(message, source.video_note)
         return (f"{source.video_note.file_unique_id}.mp4", data) if data else None
     return None
-
-
-async def _download_photo(message: Message) -> tuple[str, bytes] | None:
-    if not message.photo:
-        return None
-    photo = message.photo[-1]
-    data = await _download_telegram_file_bytes(message, photo)
-    return (f"{photo.file_unique_id}.jpg", data) if data else None
 
 
 async def _download_photo_bytes(message: Message, photo: object) -> bytes | None:

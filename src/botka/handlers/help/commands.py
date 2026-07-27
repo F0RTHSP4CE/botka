@@ -9,7 +9,7 @@ from aiogram.types import BotCommand, Message
 router = Router(name=__name__)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CommandInfo:
     command: str
     description: str
@@ -18,7 +18,7 @@ class CommandInfo:
 
 # Single source of truth for all bot commands.
 # Used to generate help text and to register commands via the Telegram API.
-COMMANDS: list[CommandInfo] = [
+COMMANDS: tuple[CommandInfo, ...] = (
     CommandInfo("start", "initialize your user profile"),
     CommandInfo("help", "show this help message"),
     CommandInfo("open", "open main door and gate (residents/members)", "Doors"),
@@ -40,7 +40,11 @@ COMMANDS: list[CommandInfo] = [
     CommandInfo(
         "need", "add item to the shopping list (residents/members)", "Shopping"
     ),
-    CommandInfo("needs", "show open items with buttons", "Shopping"),
+    CommandInfo(
+        "needs",
+        "open the pinned shopping list (private chats get a fresh list)",
+        "Shopping",
+    ),
     CommandInfo(
         "poll_close",
         "close a poll you created (or reply to the poll/awaiting message)",
@@ -48,12 +52,12 @@ COMMANDS: list[CommandInfo] = [
     ),
     CommandInfo(
         "quest",
-        "show today's quest + active quests, or view a quest by id",
+        "open the quest list, or privately view one by id",
         "Quests (residents/members)",
     ),
     CommandInfo(
         "todo",
-        "alias for /quest (backward compat)",
+        "open the pinned todo list (private chats get a fresh list)",
         "Quests (residents/members)",
     ),
     CommandInfo(
@@ -63,7 +67,7 @@ COMMANDS: list[CommandInfo] = [
     ),
     CommandInfo(
         "attach",
-        "attach a file to quest (send file with command or reply to file)",
+        "attach a file to a quest by id or by replying to its bot message",
         "Quests (residents/members)",
     ),
     CommandInfo(
@@ -125,7 +129,7 @@ COMMANDS: list[CommandInfo] = [
         "show Bambu Lab printer statuses and camera (residents/members)",
         "Printers",
     ),
-]
+)
 
 
 def build_help_text() -> str:

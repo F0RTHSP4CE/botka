@@ -26,6 +26,7 @@ async def test_need_rejects_guest_user(settings) -> None:
         command,
         settings,
         shopping_service,
+        SimpleNamespace(),
         user_record=SimpleNamespace(tier=UserTier.guest),
     )
 
@@ -52,6 +53,7 @@ async def test_topic_list_rejects_guest_user(settings) -> None:
         message,
         settings,
         shopping_service,
+        SimpleNamespace(),
         user_record=SimpleNamespace(tier=UserTier.guest),
     )
 

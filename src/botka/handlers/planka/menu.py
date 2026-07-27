@@ -8,9 +8,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.db.models import User
 from botka.handlers.menu import Btn, cancel_kb, send_main_menu
 from botka.handlers.planka.commands import _do_task_input
+from botka.services.planka_action_dispatcher import PlankaActionDispatcher
 from botka.services.planka_attachment_cache_service import PlankaAttachmentCacheService
 from botka.services.planka_command_service import PlankaCommandService
 
@@ -41,13 +41,17 @@ async def task_dialog_text_handler(
     message: Message,
     svc: FromDishka[PlankaCommandService],
     attachment_cache: FromDishka[PlankaAttachmentCacheService],
+    action_dispatcher: FromDishka[PlankaActionDispatcher],
     state: FSMContext,
-    user_record: User | None = None,
 ) -> None:
     await state.clear()
     if not message.text:
         return
     await _do_task_input(
-        message, message.text.strip(), svc, attachment_cache, user_record
+        message,
+        message.text.strip(),
+        svc,
+        attachment_cache,
+        action_dispatcher,
     )
     await send_main_menu(message)
