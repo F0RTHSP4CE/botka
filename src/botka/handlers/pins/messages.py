@@ -3,23 +3,20 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
-from typing import Any, Awaitable, Callable
 
-from aiogram import BaseMiddleware, Bot, F, Router
+from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     Chat,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    TelegramObject,
 )
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
 from botka.services.borrowed_items_service import BorrowedItemsService
 from botka.services.planka_todo_publisher import PlankaTodoPublisher
-from botka.services.polls_service import PollsService
 from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 
 log = logging.getLogger(__name__)
@@ -27,16 +24,6 @@ router = Router(name=__name__)
 
 _MEDIA_GROUP_CACHE: dict[tuple[int, str], list[int]] = {}
 _MEDIA_GROUP_LOCK = asyncio.Lock()
-
-# (chat_id, thread_id) -> topic name — tracks topics awaiting their first content message
-_PENDING_NEW_TOPICS: dict[tuple[int, int], str] = {}
-
-# Media-group batching for new-topic forwarding.
-# key = media_group_id -> (topic_name, first Message, list of message_ids)
-_NEW_TOPIC_MG_CACHE: dict[str, tuple[str, Message, list[int]]] = {}
-_NEW_TOPIC_MG_LOCK = asyncio.Lock()
-_NEW_TOPIC_MG_TASKS: dict[str, asyncio.Task[None]] = {}
-_NEW_TOPIC_MG_DELAY = 1.5  # seconds to wait for remaining album items
 
 
 def _build_message_link(chat: Chat, message_id: int) -> str | None:
@@ -281,14 +268,16 @@ async def forum_topic_created_handler(
     if topic is None:
         return
 
-    # Remember this thread so the next content message gets forwarded too.
-    if message.message_thread_id is not None:
-        _PENDING_NEW_TOPICS[(message.chat.id, message.message_thread_id)] = topic.name
+    keyboard = _build_topic_keyboard(message)
+    await message.bot.send_message(
+        chat_id=settings.pins_chat_id,
+        text=f"📂 <b>{html.escape(topic.name)}</b>",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
 
 
-def _build_topic_keyboard(
-    message: Message, topic_name: str
-) -> InlineKeyboardMarkup | None:
+def _build_topic_keyboard(message: Message) -> InlineKeyboardMarkup | None:
     if message.message_thread_id is None:
         return None
     link = _build_topic_link(message.chat, message.message_thread_id)
@@ -304,104 +293,6 @@ def _build_topic_keyboard(
     if author_button:
         rows.append([author_button])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-async def _flush_new_topic_media_group(
-    media_group_id: str,
-    bot: Bot,
-    pins_chat_id: int,
-) -> None:
-    """Wait for album messages to accumulate, then forward them all."""
-    await asyncio.sleep(_NEW_TOPIC_MG_DELAY)
-    async with _NEW_TOPIC_MG_LOCK:
-        entry = _NEW_TOPIC_MG_CACHE.pop(media_group_id, None)
-        _NEW_TOPIC_MG_TASKS.pop(media_group_id, None)
-    if entry is None:
-        return
-    topic_name, first_message, message_ids = entry
-    message_ids = sorted(set(message_ids))
-    keyboard = _build_topic_keyboard(first_message, topic_name)
-    try:
-        await bot.copy_messages(
-            chat_id=pins_chat_id,
-            from_chat_id=first_message.chat.id,
-            message_ids=message_ids,
-        )
-        # Album photos can't carry inline keyboards — send a
-        # separate message with the buttons.
-        if keyboard:
-            topic_label = html.escape(topic_name)
-            await bot.send_message(
-                chat_id=pins_chat_id,
-                text=f"📂 <b>{topic_label}</b>",
-                reply_markup=keyboard,
-                disable_web_page_preview=True,
-            )
-    except TelegramBadRequest:
-        log.debug("copy_messages failed for new topic album, falling back")
-        keyboard = _build_topic_keyboard(first_message, topic_name)
-        await _copy_or_resend(bot, pins_chat_id, first_message, keyboard)
-
-
-class NewTopicForwardMiddleware(BaseMiddleware):
-    """Forwards the first content message in a newly created topic to pins.
-
-    Runs as a middleware so it doesn't consume the event — other handlers
-    (borrowed, shopping, etc.) still process the message normally.
-    """
-
-    def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        if isinstance(event, Message) and (
-            self._settings.pins_chat_id is not None
-            and event.message_thread_id is not None
-            and not event.forum_topic_created
-            and not event.forum_topic_edited
-            and not event.forum_topic_closed
-            and not event.forum_topic_reopened
-            and not event.pinned_message
-        ):
-            thread_key = (event.chat.id, event.message_thread_id)
-            topic_name = _PENDING_NEW_TOPICS.pop(thread_key, None)
-
-            if topic_name is not None and event.media_group_id:
-                # First message of a new-topic album — start collecting.
-                async with _NEW_TOPIC_MG_LOCK:
-                    _NEW_TOPIC_MG_CACHE[event.media_group_id] = (
-                        topic_name,
-                        event,
-                        [event.message_id],
-                    )
-                    _NEW_TOPIC_MG_TASKS[event.media_group_id] = asyncio.create_task(
-                        _flush_new_topic_media_group(
-                            event.media_group_id,
-                            event.bot,
-                            self._settings.pins_chat_id,
-                        )
-                    )
-            elif topic_name is None and event.media_group_id:
-                # Subsequent album message — append if we're tracking this group.
-                async with _NEW_TOPIC_MG_LOCK:
-                    entry = _NEW_TOPIC_MG_CACHE.get(event.media_group_id)
-                    if entry is not None:
-                        entry[2].append(event.message_id)
-            elif topic_name is not None:
-                # Single (non-album) message — forward immediately.
-                keyboard = _build_topic_keyboard(event, topic_name)
-                try:
-                    await _copy_or_resend(
-                        event.bot, self._settings.pins_chat_id, event, keyboard
-                    )
-                except Exception:
-                    log.exception("Failed to forward new topic content message")
-        return await handler(event, data)
 
 
 @router.message(F.media_group_id)
@@ -425,7 +316,6 @@ async def pinned_message_handler(
     message: Message,
     settings: FromDishka[Settings],
     borrowed_service: FromDishka[BorrowedItemsService],
-    polls_service: FromDishka[PollsService],
     needs_publisher: FromDishka[ShoppingNeedsPublisher],
     todo_publisher: FromDishka[PlankaTodoPublisher],
 ) -> None:
@@ -453,17 +343,15 @@ async def pinned_message_handler(
     if borrowed_items:
         return
     if pinned.poll is not None:
-        poll = await polls_service.get_poll(pinned.poll.id)
-        if poll is not None:
-            preview = _format_poll_preview(pinned)
-            footer = _build_footer_keyboard(pinned)
-            await message.bot.send_message(
-                chat_id=settings.pins_chat_id,
-                text=preview,
-                reply_markup=footer,
-                disable_web_page_preview=True,
-            )
-            return
+        preview = _format_poll_preview(pinned)
+        footer = _build_footer_keyboard(pinned)
+        await message.bot.send_message(
+            chat_id=settings.pins_chat_id,
+            text=preview,
+            reply_markup=footer,
+            disable_web_page_preview=True,
+        )
+        return
     if pinned.media_group_id:
         message_ids = await _get_media_group_ids(
             pinned.chat.id,

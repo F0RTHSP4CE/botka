@@ -55,7 +55,6 @@ async def test_canonical_todo_pin_is_not_forwarded() -> None:
     borrowed_service = SimpleNamespace(
         list_items_for_message=AsyncMock()
     )
-    polls_service = SimpleNamespace(get_poll=AsyncMock())
     needs_publisher = SimpleNamespace(is_canonical_message=AsyncMock())
     todo_publisher = SimpleNamespace(
         is_canonical_message=AsyncMock(return_value=True)
@@ -65,7 +64,6 @@ async def test_canonical_todo_pin_is_not_forwarded() -> None:
         message,
         SimpleNamespace(pins_chat_id=999),
         borrowed_service,
-        polls_service,
         needs_publisher,
         todo_publisher,
     )
@@ -74,7 +72,6 @@ async def test_canonical_todo_pin_is_not_forwarded() -> None:
         -100123, None, 77, 456
     )
     borrowed_service.list_items_for_message.assert_not_awaited()
-    polls_service.get_poll.assert_not_awaited()
     needs_publisher.is_canonical_message.assert_not_awaited()
     bot.copy_message.assert_not_awaited()
     bot.send_message.assert_not_awaited()
@@ -92,7 +89,6 @@ async def test_canonical_shopping_pin_is_not_forwarded() -> None:
     borrowed_service = SimpleNamespace(
         list_items_for_message=AsyncMock()
     )
-    polls_service = SimpleNamespace(get_poll=AsyncMock())
     needs_publisher = SimpleNamespace(
         is_canonical_message=AsyncMock(return_value=True)
     )
@@ -108,7 +104,6 @@ async def test_canonical_shopping_pin_is_not_forwarded() -> None:
             shopping_topic_id=88,
         ),
         borrowed_service,
-        polls_service,
         needs_publisher,
         todo_publisher,
     )
@@ -144,7 +139,6 @@ async def test_other_bot_pin_is_forwarded_as_before() -> None:
     borrowed_service = SimpleNamespace(
         list_items_for_message=AsyncMock(return_value=[])
     )
-    polls_service = SimpleNamespace(get_poll=AsyncMock())
     needs_publisher = SimpleNamespace(
         is_canonical_message=AsyncMock(return_value=False)
     )
@@ -160,12 +154,90 @@ async def test_other_bot_pin_is_forwarded_as_before() -> None:
             shopping_topic_id=None,
         ),
         borrowed_service,
-        polls_service,
         needs_publisher,
         todo_publisher,
     )
 
     bot.copy_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_new_topic_is_represented_immediately() -> None:
+    bot = SimpleNamespace(send_message=AsyncMock())
+    message = SimpleNamespace(
+        bot=bot,
+        chat=SimpleNamespace(
+            id=-100123,
+            username=None,
+            title="Tracked",
+            full_name=None,
+        ),
+        message_thread_id=77,
+        from_user=SimpleNamespace(id=42, full_name="Topic Creator"),
+        sender_chat=None,
+        forum_topic_created=SimpleNamespace(name="Tools & Repairs"),
+    )
+
+    await pins_messages.forum_topic_created_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(pins_chat_id=999),
+    )
+
+    bot.send_message.assert_awaited_once()
+    call = bot.send_message.await_args.kwargs
+    assert call["chat_id"] == 999
+    assert call["text"] == "📂 <b>Tools &amp; Repairs</b>"
+    assert call["reply_markup"].inline_keyboard[0][0].url == "https://t.me/c/123/77"
+
+
+@pytest.mark.asyncio
+async def test_user_poll_pin_is_sent_as_preview_without_copying() -> None:
+    pinned = _source_message(with_video=False)
+    pinned.chat.title = "Tracked"
+    pinned.chat.full_name = None
+    pinned.message_thread_id = 77
+    pinned.poll = SimpleNamespace(
+        id="unmanaged-poll",
+        question="Lunch <today>?",
+        options=[
+            SimpleNamespace(text="Pizza & salad"),
+            SimpleNamespace(text="Soup"),
+        ],
+    )
+    pinned.media_group_id = None
+    pinned.from_user = SimpleNamespace(id=456, full_name="Poll Author")
+    pinned.sender_chat = None
+    bot = SimpleNamespace(copy_message=AsyncMock(), send_message=AsyncMock())
+    message = SimpleNamespace(bot=bot, pinned_message=pinned)
+    borrowed_service = SimpleNamespace(
+        list_items_for_message=AsyncMock(return_value=[])
+    )
+    needs_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=False)
+    )
+    todo_publisher = SimpleNamespace(
+        is_canonical_message=AsyncMock(return_value=False)
+    )
+
+    await pins_messages.pinned_message_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(pins_chat_id=999),
+        borrowed_service,
+        needs_publisher,
+        todo_publisher,
+    )
+
+    bot.copy_message.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+    call = bot.send_message.await_args.kwargs
+    assert call["text"] == (
+        "📊 <b>Lunch &lt;today&gt;?</b>\n"
+        "• Pizza &amp; salad\n"
+        "• Soup"
+    )
+    assert call["reply_markup"].inline_keyboard[0][0].url == (
+        "https://t.me/trackedchat/42"
+    )
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,6 @@ from botka.handlers import (
     users,
 )
 from botka.handlers.help.commands import get_bot_commands
-from botka.handlers.pins.messages import NewTopicForwardMiddleware
 from botka.handlers.polls import answers as poll_answers
 from botka.handlers.polls import commands as poll_commands
 from botka.handlers.polls import messages as poll_messages
@@ -124,7 +123,6 @@ async def _run() -> None:
     user_sync = UserSyncMiddleware(sessionmaker, settings)
     dp.message.middleware(MediaGroupCollectorMiddleware())
     dp.message.middleware(user_sync)
-    dp.message.middleware(NewTopicForwardMiddleware(settings))
     dp.edited_message.middleware(user_sync)
     dp.callback_query.middleware(user_sync)
     dp.poll_answer.middleware(user_sync)
