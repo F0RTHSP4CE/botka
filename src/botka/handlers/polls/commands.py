@@ -9,6 +9,7 @@ from aiogram.types import InputPollOption, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
+from botka.db.models import User, UserTier
 from botka.handlers.polls.messages import create_managed_poll
 from botka.handlers.polls.utils import format_close_time, parse_poll_question
 from botka.handlers.user_links import format_user_link
@@ -29,8 +30,11 @@ async def poll_create_handler(
     command: CommandObject,
     polls_service: FromDishka[PollsService],
     settings: FromDishka[Settings],
+    user_record: User | None = None,
 ) -> None:
-    await create_poll_from_command(message, command, polls_service, settings)
+    await create_poll_from_command(
+        message, command, polls_service, settings, user_record=user_record
+    )
 
 
 async def create_poll_from_command(
@@ -38,75 +42,37 @@ async def create_poll_from_command(
     command: CommandObject,
     polls_service: PollsService,
     settings: Settings,
+    *,
+    user_record: User | None,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
         return
+    if user_record is None or user_record.tier != UserTier.resident:
+        await message.reply("Only residents can create polls.")
+        return
 
-    question = (command.args or "").strip()
+    command_parts = _parse_poll_command_args(command.args or "")
+    if command_parts is None:
+        await message.reply(
+            "Poll options must be written on separate lines starting with "
+            "<code>- </code>, with at least two options."
+        )
+        return
+
+    question, custom_options = command_parts
     parsed = parse_poll_question(f"!{question}")
     if parsed is None:
         await message.reply(
             "Usage: /poll [residents|members|everyone] &lt;question&gt;"
         )
         return
-    if len(parsed.display_question) > MAX_POLL_QUESTION_LENGTH:
-        await message.reply(
-            "Poll question is too long (maximum 300 characters, including the audience tag)."
-        )
-        return
-
-    await create_managed_poll(
-        message,
-        parsed=parsed,
-        options=[InputPollOption(text=text) for text in DEFAULT_POLL_OPTIONS],
-        option_texts=list(DEFAULT_POLL_OPTIONS),
-        polls_service=polls_service,
-        settings=settings,
-        delete_source_message=False,
-    )
-
-
-@router.message(Command("poll_custom"))
-@inject
-async def poll_custom_create_handler(
-    message: Message,
-    command: CommandObject,
-    polls_service: FromDishka[PollsService],
-    settings: FromDishka[Settings],
-) -> None:
-    await create_custom_poll_from_command(message, command, polls_service, settings)
-
-
-async def create_custom_poll_from_command(
-    message: Message,
-    command: CommandObject,
-    polls_service: PollsService,
-    settings: Settings,
-) -> None:
-    if message.from_user is None:
-        await message.reply("Cannot determine sender.")
-        return
-
-    parts = [part.strip() for part in (command.args or "").split("|")]
-    if len(parts) < 3 or any(not part for part in parts):
-        await message.reply(
-            "Usage: /poll_custom [residents|members|everyone] &lt;question&gt; "
-            "| &lt;option 1&gt; | &lt;option 2&gt; [| ...]"
-        )
-        return
-
-    question, *option_texts = parts
+    option_texts = custom_options or list(DEFAULT_POLL_OPTIONS)
     if len(option_texts) > MAX_POLL_OPTIONS:
         await message.reply("A poll can have at most 12 options.")
         return
     if any(len(option) > MAX_POLL_OPTION_LENGTH for option in option_texts):
         await message.reply("Each poll option can have at most 100 characters.")
-        return
-
-    parsed = parse_poll_question(f"!{question}")
-    if parsed is None:
-        await message.reply("Poll question cannot be empty.")
         return
     if len(parsed.display_question) > MAX_POLL_QUESTION_LENGTH:
         await message.reply(
@@ -219,3 +185,27 @@ def _extract_poll_close_args(text: str | None) -> str:
     if command.startswith("poll_close"):
         return parts[1].strip() if len(parts) > 1 else ""
     return ""
+
+
+def _parse_poll_command_args(raw_args: str) -> tuple[str, list[str] | None] | None:
+    lines = raw_args.strip().splitlines()
+    if not lines:
+        return "", None
+
+    question = lines[0].strip()
+    option_lines = [line.strip() for line in lines[1:] if line.strip()]
+    if not option_lines:
+        return question, None
+
+    options: list[str] = []
+    for line in option_lines:
+        if not line.startswith("-"):
+            return None
+        option = line[1:].strip()
+        if not option:
+            return None
+        options.append(option)
+
+    if len(options) < 2:
+        return None
+    return question, options

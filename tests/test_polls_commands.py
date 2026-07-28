@@ -3,11 +3,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from botka.db.models import PollAudience
-from botka.handlers.polls.commands import (
-    create_custom_poll_from_command,
-    create_poll_from_command,
-)
+import pytest
+
+from botka.db.models import PollAudience, UserTier
+from botka.handlers.polls.commands import create_poll_from_command
+
+
+def resident_user():
+    return SimpleNamespace(tier=UserTier.resident)
 
 
 async def test_poll_command_creates_public_poll_with_default_options(settings):
@@ -42,6 +45,7 @@ async def test_poll_command_creates_public_poll_with_default_options(settings):
         SimpleNamespace(args="[members] Accept @RedTeapot as a member?"),
         polls_service,
         settings,
+        user_record=resident_user(),
     )
 
     send_poll_kwargs = bot.send_poll.await_args.kwargs
@@ -101,6 +105,7 @@ async def test_poll_command_defaults_to_residents(settings):
         SimpleNamespace(args="Should we buy a new kettle?"),
         polls_service,
         settings,
+        user_record=resident_user(),
     )
 
     assert bot.send_poll.await_args.kwargs["question"] == (
@@ -111,53 +116,16 @@ async def test_poll_command_defaults_to_residents(settings):
     )
 
 
-async def test_poll_command_without_question_shows_usage(settings):
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=123),
-        reply=AsyncMock(),
-    )
-    polls_service = SimpleNamespace()
-
-    await create_poll_from_command(
-        message,
-        SimpleNamespace(args=None),
-        polls_service,
-        settings,
-    )
-
-    message.reply.assert_awaited_once_with(
-        "Usage: /poll [residents|members|everyone] &lt;question&gt;"
-    )
-
-
-async def test_poll_command_rejects_question_over_telegram_limit(settings):
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=123),
-        reply=AsyncMock(),
-    )
-
-    await create_poll_from_command(
-        message,
-        SimpleNamespace(args="x" * 300),
-        SimpleNamespace(),
-        settings,
-    )
-
-    message.reply.assert_awaited_once_with(
-        "Poll question is too long (maximum 300 characters, including the audience tag)."
-    )
-
-
-async def test_custom_poll_command_creates_poll_with_supplied_options(settings):
+async def test_poll_command_accepts_options_as_dash_list(settings):
     bot = SimpleNamespace(
         send_poll=AsyncMock(
             return_value=SimpleNamespace(
-                poll=SimpleNamespace(id="poll-custom"),
+                poll=SimpleNamespace(id="poll-dash-list"),
                 chat=SimpleNamespace(id=-100),
-                message_id=40,
+                message_id=35,
             )
         ),
-        send_message=AsyncMock(return_value=SimpleNamespace(message_id=41)),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=36)),
         pin_chat_message=AsyncMock(),
     )
     message = SimpleNamespace(
@@ -176,45 +144,100 @@ async def test_custom_poll_command_creates_poll_with_supplied_options(settings):
         set_poll_options=AsyncMock(),
     )
 
-    await create_custom_poll_from_command(
+    await create_poll_from_command(
         message,
-        SimpleNamespace(args="[everyone] Where next? | Mountains | Sea | Stay home"),
+        SimpleNamespace(args="Accept John?\n- yes\n- no\n- maybe"),
         polls_service,
         settings,
+        user_record=resident_user(),
     )
 
     send_poll_kwargs = bot.send_poll.await_args.kwargs
-    assert send_poll_kwargs["question"] == "[everyone] Where next?"
+    assert send_poll_kwargs["question"] == "[residents] Accept John?"
     assert [option.text for option in send_poll_kwargs["options"]] == [
-        "Mountains",
-        "Sea",
-        "Stay home",
+        "yes",
+        "no",
+        "maybe",
     ]
-    assert send_poll_kwargs["is_anonymous"] is False
-    assert polls_service.create_poll.await_args.kwargs["audience"] is (
-        PollAudience.everyone
-    )
     polls_service.set_poll_options.assert_awaited_once_with(
-        "poll-custom", ["Mountains", "Sea", "Stay home"]
+        "poll-dash-list", ["yes", "no", "maybe"]
     )
     polls_service.set_ignored_option_ids.assert_not_awaited()
-    message.delete.assert_not_awaited()
 
 
-async def test_custom_poll_command_requires_two_options(settings):
+async def test_poll_command_dash_list_requires_two_options(settings):
     message = SimpleNamespace(
         from_user=SimpleNamespace(id=123),
         reply=AsyncMock(),
     )
 
-    await create_custom_poll_from_command(
+    await create_poll_from_command(
         message,
-        SimpleNamespace(args="Question | Only one option"),
+        SimpleNamespace(args="Accept John?\n- yes"),
         SimpleNamespace(),
         settings,
+        user_record=resident_user(),
     )
 
     message.reply.assert_awaited_once_with(
-        "Usage: /poll_custom [residents|members|everyone] &lt;question&gt; "
-        "| &lt;option 1&gt; | &lt;option 2&gt; [| ...]"
+        "Poll options must be written on separate lines starting with "
+        "<code>- </code>, with at least two options."
     )
+
+
+async def test_poll_command_without_question_shows_usage(settings):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123),
+        reply=AsyncMock(),
+    )
+    polls_service = SimpleNamespace()
+
+    await create_poll_from_command(
+        message,
+        SimpleNamespace(args=None),
+        polls_service,
+        settings,
+        user_record=resident_user(),
+    )
+
+    message.reply.assert_awaited_once_with(
+        "Usage: /poll [residents|members|everyone] &lt;question&gt;"
+    )
+
+
+async def test_poll_command_rejects_question_over_telegram_limit(settings):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123),
+        reply=AsyncMock(),
+    )
+
+    await create_poll_from_command(
+        message,
+        SimpleNamespace(args="x" * 300),
+        SimpleNamespace(),
+        settings,
+        user_record=resident_user(),
+    )
+
+    message.reply.assert_awaited_once_with(
+        "Poll question is too long (maximum 300 characters, including the audience tag)."
+    )
+
+
+@pytest.mark.parametrize("tier", [UserTier.member, UserTier.guest])
+async def test_poll_command_rejects_non_residents(settings, tier):
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123),
+        reply=AsyncMock(),
+    )
+    polls_service = SimpleNamespace()
+
+    await create_poll_from_command(
+        message,
+        SimpleNamespace(args="Should this poll be created?"),
+        polls_service,
+        settings,
+        user_record=SimpleNamespace(tier=tier),
+    )
+
+    message.reply.assert_awaited_once_with("Only residents can create polls.")

@@ -47,12 +47,7 @@ COMMANDS: tuple[CommandInfo, ...] = (
     ),
     CommandInfo(
         "poll",
-        "create a public (non-anonymous) poll with Yes / No / See results",
-        "Polls",
-    ),
-    CommandInfo(
-        "poll_custom",
-        "create a public poll with custom options separated by |",
+        "create a public poll; custom options use dash lines (residents only)",
         "Polls",
     ),
     CommandInfo(
