@@ -32,25 +32,23 @@ class Btn:
     DEPOSIT = "💳 Deposit"
     FRIDGE = "🍱 Fridge"
     TRANSFER = "💸 Transfer"
-    OTHER = "➕ Other commands…"
     STATUS = "📡 Status"
 
     # Guest menu
     ASK_VISIT = "📩 Ask to visit"
 
-    # Other submenu
+    # Additional resident/member actions
     NEEDS = "🛒 Shopping list"
     BORROWED = "📦 Borrowed"
     TODO = "📜 Quests"
+    CREATE_QUEST = "➕ Create quest"
     BOARDS = "📌 Boards"
     UPS = "🔋 UPS"
     TRANSACTIONS = "💸 Transactions"
     AGENDA = "📅 Agenda"
     NEED_ITEM = "➕ Need item"
-    TASK = "📋 Task"
     ADD_MAC = "🖥️ Add my MAC"
-    BAMBU = "🖨️ Bambu 3D printers"
-    BACK = "← Back"
+    BAMBU = "🖨️ 3D printers status"
 
     # FSM control
     CANCEL = "❌ Cancel"
@@ -68,8 +66,10 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=Btn.OPEN_GATE), KeyboardButton(text=Btn.OPEN)],
             [KeyboardButton(text=Btn.BALANCE), KeyboardButton(text=Btn.DEPOSIT)],
-            [KeyboardButton(text=Btn.FRIDGE), KeyboardButton(text=Btn.TRANSFER)],
-            [KeyboardButton(text=Btn.STATUS), KeyboardButton(text=Btn.OTHER)],
+            [KeyboardButton(text=Btn.FRIDGE), KeyboardButton(text=Btn.STATUS)],
+            [KeyboardButton(text=Btn.NEEDS), KeyboardButton(text=Btn.NEED_ITEM)],
+            [KeyboardButton(text=Btn.TODO), KeyboardButton(text=Btn.CREATE_QUEST)],
+            [KeyboardButton(text=Btn.BAMBU), KeyboardButton(text=Btn.ADD_MAC)],
         ],
         resize_keyboard=True,
     )
@@ -80,19 +80,6 @@ def guest_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=Btn.OPEN_GATE), KeyboardButton(text=Btn.ASK_VISIT)],
             [KeyboardButton(text=Btn.NEEDS), KeyboardButton(text=Btn.TODO)],
-        ],
-        resize_keyboard=True,
-    )
-
-
-def other_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=Btn.NEEDS), KeyboardButton(text=Btn.NEED_ITEM)],
-            [KeyboardButton(text=Btn.BORROWED), KeyboardButton(text=Btn.TODO)],
-            [KeyboardButton(text=Btn.BAMBU), KeyboardButton(text=Btn.TRANSACTIONS)],
-            [KeyboardButton(text=Btn.AGENDA), KeyboardButton(text=Btn.ADD_MAC)],
-            [KeyboardButton(text=Btn.UPS), KeyboardButton(text=Btn.BACK)],
         ],
         resize_keyboard=True,
     )
@@ -142,11 +129,6 @@ async def menu_command(
     await send_main_menu(message, user_record)
 
 
-@router.message(F.text == Btn.OTHER)
-async def show_other_menu(message: Message) -> None:
-    await message.answer("Other:", reply_markup=other_menu_kb())
-
-
 @router.message(F.text == Btn.ASK_VISIT)
 @inject
 async def ask_visit_handler(
@@ -179,15 +161,6 @@ async def ask_visit_handler(
             inline_keyboard=[[InlineKeyboardButton(text="📩 Request a visit", url=url)]]
         ),
     )
-
-
-@router.message(F.text == Btn.BACK)
-@inject
-async def show_main_menu_back(
-    message: Message,
-    user_record: User | None = None,
-) -> None:
-    await send_main_menu(message, user_record)
 
 
 @router.message(F.text == Btn.CANCEL)
