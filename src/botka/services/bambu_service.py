@@ -5,6 +5,7 @@ import base64
 import logging
 import time
 from dataclasses import dataclass
+from threading import Lock
 
 import bambulabs_api as bl
 from bambulabs_api.states_info import GcodeState
@@ -93,6 +94,7 @@ class BambuService:
         self._printers: dict[str, bl.Printer] = {
             cfg.name: bl.Printer(cfg.ip, cfg.access_code, cfg.serial) for cfg in configs
         }
+        self._camera_start_locks = {name: Lock() for name in self._printers}
 
     @classmethod
     def from_settings(cls, settings: Settings) -> BambuService:
@@ -122,14 +124,11 @@ class BambuService:
     def _connect_sync(self) -> None:
         for name, printer in self._printers.items():
             try:
-                printer.connect()
-                if self._wait_for_ready_sync(printer):
-                    logger.info("Connected to Bambu printer: %s", name)
-                else:
-                    logger.warning(
-                        "Bambu printer %s connected but MQTT not ready after timeout",
-                        name,
-                    )
+                # Printer.connect() also starts a camera worker.  Keep status
+                # requests MQTT-only; an unreachable camera otherwise enters a
+                # noisy reconnect loop even when nobody requested an image.
+                printer.mqtt_start()
+                logger.info("Started Bambu MQTT client: %s", name)
             except Exception:
                 logger.exception("Failed to connect to Bambu printer: %s", name)
 
@@ -150,23 +149,23 @@ class BambuService:
     # Status                                                               #
     # ------------------------------------------------------------------ #
 
-    @staticmethod
-    def _wait_for_ready_sync(printer: bl.Printer, timeout: float = 15.0) -> bool:
-        """Block until the printer's MQTT client has received initial data."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if printer.mqtt_client_ready():
-                return True
-            time.sleep(0.5)
-        return False
-
     def _get_status_sync(self, name: str) -> BambuPrinterStatus | None:
         printer = self._printers.get(name)
         if printer is None:
             return None
-        if not self._wait_for_ready_sync(printer):
-            logger.warning("MQTT not ready for printer %s after timeout", name)
-            return None
+        # All getters below read MQTT data cached by the library.  Waiting for
+        # an unreachable printer only ties up worker threads and makes /bambu
+        # appear to hang, so return an explicit offline status immediately.
+        if not printer.mqtt_client_ready():
+            return BambuPrinterStatus(
+                name=name,
+                connected=False,
+                gcode_state=GcodeState.UNKNOWN,
+                percentage=None,
+                remaining_minutes=None,
+                file_name=None,
+                error_code=0,
+            )
         try:
             gcode_state = printer.get_state()
             raw_pct = printer.get_percentage()
@@ -207,9 +206,16 @@ class BambuService:
     # ------------------------------------------------------------------ #
 
     def _get_photo_sync(self, name: str) -> bytes | None:
-        """Poll the camera thread for the latest JPEG frame within the timeout."""
+        """Start the requested camera and poll for a JPEG within the timeout."""
         printer = self._printers.get(name)
         if printer is None:
+            return None
+        try:
+            # PrinterCamera.start() is idempotent but not internally locked.
+            with self._camera_start_locks[name]:
+                printer.camera_start()
+        except Exception:
+            logger.exception("Failed to start camera for printer: %s", name)
             return None
         deadline = time.monotonic() + self._camera_timeout
         while time.monotonic() < deadline:
