@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.methods import PromoteChatMember
 
 from botka.db.models import UserTier
+from botka.handlers.anonymous_admins import commands
 from botka.handlers.anonymous_admins.commands import (
     ADMIN_PERMISSION_FIELDS,
     anon_handler,
     deanon_handler,
 )
+
+
+@pytest.fixture(autouse=True)
+def disable_admin_operation_cooldown(monkeypatch) -> AsyncMock:
+    commands._command_last_run_at.clear()
+    sleep = AsyncMock()
+    monkeypatch.setattr(commands, "cooldown_sleep", sleep)
+    return sleep
 
 
 def _message(*, event_log: list[str] | None = None) -> SimpleNamespace:
@@ -114,6 +124,39 @@ async def test_anon_promotes_chat_residents_and_snapshots_prior_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_anon_honors_promote_chat_member_retry_after(
+    monkeypatch,
+) -> None:
+    message = _message()
+    message.bot.get_chat_member.return_value = SimpleNamespace(
+        status=ChatMemberStatus.MEMBER
+    )
+    retry_after = TelegramRetryAfter(
+        method=PromoteChatMember(chat_id=-100123, user_id=1),
+        message="Too Many Requests",
+        retry_after=30,
+    )
+    message.bot.promote_chat_member.side_effect = [retry_after, True]
+    service = SimpleNamespace(
+        list_resident_ids=AsyncMock(return_value=[1]),
+        get_snapshot=AsyncMock(return_value=None),
+        save_snapshot=AsyncMock(),
+    )
+    retry_sleep = AsyncMock()
+    monkeypatch.setattr(
+        "botka.services.telegram_retry.asyncio.sleep",
+        retry_sleep,
+    )
+
+    await anon_handler.__dishka_orig_func__(
+        message, service, _settings(), _resident()
+    )
+
+    assert message.bot.promote_chat_member.await_count == 2
+    retry_sleep.assert_awaited_once_with(30)
+
+
+@pytest.mark.asyncio
 async def test_anon_rejects_guest() -> None:
     message = _message()
     service = SimpleNamespace(list_resident_ids=AsyncMock())
@@ -154,6 +197,26 @@ async def test_anon_rejects_group_outside_allowlist() -> None:
     message.delete.assert_awaited_once()
     service.list_resident_ids.assert_not_awaited()
     message.bot.get_chat_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anon_has_five_minute_per_chat_cooldown(monkeypatch) -> None:
+    message = _message()
+    service = SimpleNamespace(list_resident_ids=AsyncMock(return_value=[]))
+    monkeypatch.setattr(commands, "monotonic", Mock(side_effect=[100.0, 399.9, 400.0]))
+
+    await anon_handler.__dishka_orig_func__(
+        message, service, _settings(), _member()
+    )
+    await anon_handler.__dishka_orig_func__(
+        message, service, _settings(), _member()
+    )
+    await anon_handler.__dishka_orig_func__(
+        message, service, _settings(), _member()
+    )
+
+    assert service.list_resident_ids.await_count == 2
+    assert message.delete.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -260,6 +323,30 @@ async def test_deanon_accepts_visible_member_tier() -> None:
         message, service, _settings(), _member()
     )
 
+    service.list_snapshots.assert_awaited_once_with(message.chat.id)
+
+
+@pytest.mark.asyncio
+async def test_anon_and_deanon_share_five_minute_cooldown(monkeypatch) -> None:
+    message = _message()
+    service = SimpleNamespace(
+        list_resident_ids=AsyncMock(return_value=[]),
+        list_snapshots=AsyncMock(return_value=[]),
+        delete_snapshot=AsyncMock(),
+    )
+    monkeypatch.setattr(commands, "monotonic", Mock(side_effect=[100.0, 399.9, 400.0]))
+
+    await anon_handler.__dishka_orig_func__(
+        message, service, _settings(), _resident()
+    )
+    await deanon_handler.__dishka_orig_func__(
+        message, service, _settings(), _resident()
+    )
+    await deanon_handler.__dishka_orig_func__(
+        message, service, _settings(), _resident()
+    )
+
+    service.list_resident_ids.assert_awaited_once()
     service.list_snapshots.assert_awaited_once_with(message.chat.id)
 
 
