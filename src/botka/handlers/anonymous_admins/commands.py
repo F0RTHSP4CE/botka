@@ -125,12 +125,12 @@ async def anon_handler(
     if not _claim_command_run(message.chat.id):
         return
 
-    for telegram_id in await user_service.list_resident_ids():
+    for telegram_id in await user_service.list_anon_eligible_ids():
         try:
             member = await message.bot.get_chat_member(message.chat.id, telegram_id)
         except TelegramAPIError:
             logger.warning(
-                "Could not inspect resident %s in chat %s",
+                "Could not inspect anon-eligible user %s in chat %s",
                 telegram_id,
                 message.chat.id,
                 exc_info=True,
@@ -154,7 +154,7 @@ async def anon_handler(
             )
         except TelegramAPIError:
             logger.warning(
-                "Could not enable anonymous admin for resident %s in chat %s",
+                "Could not enable anonymous admin for user %s in chat %s",
                 telegram_id,
                 message.chat.id,
                 exc_info=True,

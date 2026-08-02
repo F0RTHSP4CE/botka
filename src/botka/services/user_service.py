@@ -51,9 +51,11 @@ class UserService:
         result = await self._session.execute(select(User).where(User.id.in_(ids)))
         return result.scalars().all()
 
-    async def list_resident_ids(self) -> Sequence[int]:
+    async def list_anon_eligible_ids(self) -> Sequence[int]:
         result = await self._session.execute(
-            select(User.telegram_id).where(User.tier == UserTier.resident)
+            select(User.telegram_id).where(
+                User.tier.in_((UserTier.resident, UserTier.member))
+            )
         )
         return result.scalars().all()
 

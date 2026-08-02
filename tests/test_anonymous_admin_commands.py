@@ -76,7 +76,7 @@ def _administrator(
 
 
 @pytest.mark.asyncio
-async def test_anon_promotes_eligible_residents_without_snapshots() -> None:
+async def test_anon_promotes_eligible_residents_and_members() -> None:
     message = _message()
     message.bot.get_chat_member.side_effect = [
         SimpleNamespace(status=ChatMemberStatus.MEMBER),
@@ -88,7 +88,7 @@ async def test_anon_promotes_eligible_residents_without_snapshots() -> None:
         SimpleNamespace(status=ChatMemberStatus.LEFT),
     ]
     user_service = SimpleNamespace(
-        list_resident_ids=AsyncMock(return_value=[1, 2, 3, 4])
+        list_anon_eligible_ids=AsyncMock(return_value=[1, 2, 3, 4])
     )
 
     await anon_handler.__dishka_orig_func__(
@@ -115,7 +115,7 @@ async def test_anon_honors_promote_chat_member_retry_after(monkeypatch) -> None:
     )
     message.bot.promote_chat_member.side_effect = [retry_after, True]
     user_service = SimpleNamespace(
-        list_resident_ids=AsyncMock(return_value=[1])
+        list_anon_eligible_ids=AsyncMock(return_value=[1])
     )
     retry_sleep = AsyncMock()
     monkeypatch.setattr(
@@ -134,7 +134,7 @@ async def test_anon_honors_promote_chat_member_retry_after(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_anon_rejects_guest() -> None:
     message = _message()
-    user_service = SimpleNamespace(list_resident_ids=AsyncMock())
+    user_service = SimpleNamespace(list_anon_eligible_ids=AsyncMock())
 
     await anon_handler.__dishka_orig_func__(
         message,
@@ -144,33 +144,33 @@ async def test_anon_rejects_guest() -> None:
     )
 
     message.delete.assert_awaited_once()
-    user_service.list_resident_ids.assert_not_awaited()
+    user_service.list_anon_eligible_ids.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_anon_accepts_member_tier() -> None:
     message = _message()
     user_service = SimpleNamespace(
-        list_resident_ids=AsyncMock(return_value=[])
+        list_anon_eligible_ids=AsyncMock(return_value=[])
     )
 
     await anon_handler.__dishka_orig_func__(
         message, user_service, _settings(), _member()
     )
 
-    user_service.list_resident_ids.assert_awaited_once()
+    user_service.list_anon_eligible_ids.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_anon_rejects_group_outside_allowlist() -> None:
     message = _message()
-    user_service = SimpleNamespace(list_resident_ids=AsyncMock())
+    user_service = SimpleNamespace(list_anon_eligible_ids=AsyncMock())
 
     await anon_handler.__dishka_orig_func__(
         message, user_service, _settings(-100999), _resident()
     )
 
-    user_service.list_resident_ids.assert_not_awaited()
+    user_service.list_anon_eligible_ids.assert_not_awaited()
     message.bot.get_chat_member.assert_not_awaited()
 
 
@@ -178,7 +178,7 @@ async def test_anon_rejects_group_outside_allowlist() -> None:
 async def test_anon_has_five_minute_per_chat_cooldown(monkeypatch) -> None:
     message = _message()
     user_service = SimpleNamespace(
-        list_resident_ids=AsyncMock(return_value=[])
+        list_anon_eligible_ids=AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
         commands,
@@ -191,7 +191,7 @@ async def test_anon_has_five_minute_per_chat_cooldown(monkeypatch) -> None:
             message, user_service, _settings(), _member()
         )
 
-    assert user_service.list_resident_ids.await_count == 2
+    assert user_service.list_anon_eligible_ids.await_count == 2
     assert message.delete.await_count == 3
 
 
@@ -273,7 +273,7 @@ async def test_deanon_accepts_visible_member_tier() -> None:
 async def test_anon_and_deanon_share_five_minute_cooldown(monkeypatch) -> None:
     message = _message()
     user_service = SimpleNamespace(
-        list_resident_ids=AsyncMock(return_value=[])
+        list_anon_eligible_ids=AsyncMock(return_value=[])
     )
     monkeypatch.setattr(
         commands,
@@ -287,7 +287,7 @@ async def test_anon_and_deanon_share_five_minute_cooldown(monkeypatch) -> None:
     await deanon_handler.__dishka_orig_func__(message, _settings(), _resident())
     await deanon_handler.__dishka_orig_func__(message, _settings(), _resident())
 
-    user_service.list_resident_ids.assert_awaited_once()
+    user_service.list_anon_eligible_ids.assert_awaited_once()
     message.bot.get_chat_administrators.assert_awaited_once_with(message.chat.id)
 
 
