@@ -17,6 +17,7 @@ from botka.config import Settings
 from botka.db.session import init_models
 from botka.di.container import build_container
 from botka.handlers import (
+    anonymous_admins,
     bambu,
     borrowed,
     doors,
@@ -89,6 +90,7 @@ async def _run() -> None:
     dp = Dispatcher()
     dp.include_router(help.commands.router)
     dp.include_router(users.commands.router)
+    dp.include_router(anonymous_admins.commands.router)
     dp.include_router(menu_handler.router)
     dp.include_router(refinance.commands.router)
     dp.include_router(refinance.callbacks.router)

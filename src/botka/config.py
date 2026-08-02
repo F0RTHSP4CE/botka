@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     pins_chat_id: int | None = None
     pins_tracked_chat_ids: list[int] | str = Field(default_factory=list)
     bootstrap_resident_ids: list[int] | str = Field(default_factory=list)
+    allowed_anon_group_ids: list[int] | str = Field(default_factory=list)
     usbutler_base_url: str | None = None
     usbutler_token: str | None = None
     usbutler_timeout_seconds: float = 5.0
@@ -150,6 +151,20 @@ class Settings(BaseSettings):
     @field_validator("pins_tracked_chat_ids", mode="before")
     @classmethod
     def parse_pins_tracked_ids(
+        cls, value: str | int | Iterable[int] | None
+    ) -> list[int]:
+        if value is None:
+            return []
+        if isinstance(value, int):
+            return [value]
+        if isinstance(value, str):
+            items = [part.strip() for part in value.split(",") if part.strip()]
+            return [int(part) for part in items]
+        return list(value)
+
+    @field_validator("allowed_anon_group_ids", mode="before")
+    @classmethod
+    def parse_allowed_anon_group_ids(
         cls, value: str | int | Iterable[int] | None
     ) -> list[int]:
         if value is None:

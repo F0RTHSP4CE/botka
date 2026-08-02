@@ -23,7 +23,10 @@ class UserSyncMiddleware(BaseMiddleware):
     ) -> Any:
         user = None
         if isinstance(event, Message):
-            user = event.from_user
+            # Telegram supplies a fake ``from_user`` for messages sent by an
+            # anonymous administrator. It cannot be mapped to a real user record.
+            if event.sender_chat is None:
+                user = event.from_user
         elif isinstance(event, CallbackQuery):
             user = event.from_user
         elif isinstance(event, PollAnswer):

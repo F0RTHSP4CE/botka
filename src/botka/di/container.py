@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from botka.config import Settings
 from botka.db.session import create_engine, create_sessionmaker
+from botka.services.anonymous_admin_service import AnonymousAdminService
 from botka.services.bambu_service import BambuService
 from botka.services.borrowed_item_detector import BorrowedItemDetector
 from botka.services.borrowed_items_service import BorrowedItemsService
@@ -61,6 +62,12 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def user_service(self, session: AsyncSession, settings: Settings) -> UserService:
         return UserService(session, settings)
+
+    @provide(scope=Scope.REQUEST)
+    def anonymous_admin_service(
+        self, session: AsyncSession
+    ) -> AnonymousAdminService:
+        return AnonymousAdminService(session)
 
     @provide(scope=Scope.REQUEST)
     def shopping_service(self, session: AsyncSession) -> ShoppingListService:
