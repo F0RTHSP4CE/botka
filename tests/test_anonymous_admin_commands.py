@@ -44,6 +44,10 @@ def _resident() -> SimpleNamespace:
     return SimpleNamespace(tier=UserTier.resident)
 
 
+def _member() -> SimpleNamespace:
+    return SimpleNamespace(tier=UserTier.member)
+
+
 def _settings(*group_ids: int) -> SimpleNamespace:
     return SimpleNamespace(
         allowed_anon_group_ids=list(group_ids) if group_ids else [-100123]
@@ -110,7 +114,7 @@ async def test_anon_promotes_chat_residents_and_snapshots_prior_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_anon_rejects_non_resident() -> None:
+async def test_anon_rejects_guest() -> None:
     message = _message()
     service = SimpleNamespace(list_resident_ids=AsyncMock())
 
@@ -118,12 +122,24 @@ async def test_anon_rejects_non_resident() -> None:
         message,
         service,
         _settings(),
-        SimpleNamespace(tier=UserTier.member),
+        SimpleNamespace(tier=UserTier.guest),
     )
 
     message.delete.assert_awaited_once()
     message.reply.assert_not_awaited()
     service.list_resident_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anon_accepts_member_tier() -> None:
+    message = _message()
+    service = SimpleNamespace(list_resident_ids=AsyncMock(return_value=[]))
+
+    await anon_handler.__dishka_orig_func__(
+        message, service, _settings(), _member()
+    )
+
+    service.list_resident_ids.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -230,6 +246,21 @@ async def test_deanon_accepts_anonymous_admin_of_same_chat() -> None:
     assert events == ["delete-command"]
     service.list_snapshots.assert_awaited_once_with(message.chat.id)
     message.answer.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_deanon_accepts_visible_member_tier() -> None:
+    message = _message()
+    service = SimpleNamespace(
+        list_snapshots=AsyncMock(return_value=[]),
+        delete_snapshot=AsyncMock(),
+    )
+
+    await deanon_handler.__dishka_orig_func__(
+        message, service, _settings(), _member()
+    )
+
+    service.list_snapshots.assert_awaited_once_with(message.chat.id)
 
 
 @pytest.mark.asyncio

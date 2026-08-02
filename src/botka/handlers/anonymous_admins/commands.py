@@ -55,8 +55,11 @@ def _restore_permissions(
     return {field: False for field in ADMIN_PERMISSION_FIELDS}
 
 
-def _is_resident(user_record: User | None) -> bool:
-    return user_record is not None and user_record.tier == UserTier.resident
+def _has_command_access(user_record: User | None) -> bool:
+    return user_record is not None and user_record.tier in (
+        UserTier.resident,
+        UserTier.member,
+    )
 
 
 def _is_supergroup(message: Message) -> bool:
@@ -95,7 +98,7 @@ async def anon_handler(
 
     if not _is_supergroup(message) or not _is_allowed_group(message, settings):
         return
-    if not _is_resident(user_record):
+    if not _has_command_access(user_record):
         return
 
     promoted = skipped = failed = 0
@@ -176,7 +179,7 @@ async def deanon_handler(
 
     if not _is_supergroup(message) or not _is_allowed_group(message, settings):
         return
-    if not _is_resident(user_record) and not _is_anonymous_chat_admin(message):
+    if not _has_command_access(user_record) and not _is_anonymous_chat_admin(message):
         return
 
     restored = failed = 0
