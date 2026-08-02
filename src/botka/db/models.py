@@ -9,7 +9,6 @@ from sqlalchemy import (
     DateTime,
     Enum,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -43,30 +42,6 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tier: Mapped[UserTier] = mapped_column(Enum(UserTier), default=UserTier.guest)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-
-class AnonymousAdminSnapshot(Base):
-    """Administrator state to restore after a chat's anonymous mode ends."""
-
-    __tablename__ = "anonymous_admin_snapshots"
-    __table_args__ = (
-        UniqueConstraint(
-            "chat_id",
-            "telegram_id",
-            name="uq_anonymous_admin_snapshot_chat_user",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chat_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    was_administrator: Mapped[bool] = mapped_column(Boolean, nullable=False)
-    permissions: Mapped[dict[str, bool | None]] = mapped_column(
-        JSON, default=dict, nullable=False
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

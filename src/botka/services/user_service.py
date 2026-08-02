@@ -51,6 +51,12 @@ class UserService:
         result = await self._session.execute(select(User).where(User.id.in_(ids)))
         return result.scalars().all()
 
+    async def list_resident_ids(self) -> Sequence[int]:
+        result = await self._session.execute(
+            select(User.telegram_id).where(User.tier == UserTier.resident)
+        )
+        return result.scalars().all()
+
     async def _upsert(
         self, telegram_id: int, username: str | None, tier: UserTier
     ) -> User:

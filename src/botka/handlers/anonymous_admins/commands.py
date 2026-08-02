@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import logging
 from asyncio import sleep as cooldown_sleep
+from collections.abc import Sequence
 from time import monotonic
 
 from aiogram import Router
 from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import ChatMemberAdministrator, Message
+from aiogram.types import ChatMemberUnion, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.config import Settings
-from botka.db.models import AnonymousAdminSnapshot, User, UserTier
-from botka.services.anonymous_admin_service import AnonymousAdminService
+from botka.db.models import User, UserTier
 from botka.services.telegram_retry import call_with_retry_after
+from botka.services.user_service import UserService
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
@@ -40,25 +41,7 @@ ADMIN_PERMISSION_FIELDS = (
     "can_manage_topics",
     "can_manage_direct_messages",
 )
-
-
-def _administrator_permissions(
-    member: ChatMemberAdministrator,
-) -> dict[str, bool | None]:
-    return {field: getattr(member, field) for field in ADMIN_PERMISSION_FIELDS}
-
-
-def _restore_permissions(
-    snapshot: AnonymousAdminSnapshot,
-) -> dict[str, bool | None]:
-    if snapshot.was_administrator:
-        # Ignore unknown fields if a snapshot outlives an aiogram/Bot API upgrade.
-        return {
-            field: value
-            for field, value in snapshot.permissions.items()
-            if field in ADMIN_PERMISSION_FIELDS and value is not None
-        }
-    return {field: False for field in ADMIN_PERMISSION_FIELDS}
+DEMOTION_PERMISSIONS = {field: False for field in ADMIN_PERMISSION_FIELDS}
 
 
 def _has_command_access(user_record: User | None) -> bool:
@@ -111,11 +94,18 @@ async def _promote_chat_member(
     )
 
 
+async def _get_chat_administrators(message: Message) -> Sequence[ChatMemberUnion]:
+    return await call_with_retry_after(
+        lambda: message.bot.get_chat_administrators(message.chat.id),
+        description=f"Administrator list for {message.chat.id}",
+    )
+
+
 @router.message(Command("anon"))
 @inject
 async def anon_handler(
     message: Message,
-    service: FromDishka[AnonymousAdminService],
+    user_service: FromDishka[UserService],
     settings: FromDishka[Settings],
     user_record: User | None = None,
 ) -> None:
@@ -135,8 +125,7 @@ async def anon_handler(
     if not _claim_command_run(message.chat.id):
         return
 
-    promoted = skipped = failed = 0
-    for telegram_id in await service.list_resident_ids():
+    for telegram_id in await user_service.list_resident_ids():
         try:
             member = await message.bot.get_chat_member(message.chat.id, telegram_id)
         except TelegramAPIError:
@@ -146,32 +135,15 @@ async def anon_handler(
                 message.chat.id,
                 exc_info=True,
             )
-            failed += 1
             continue
 
         status = member.status
         if status == ChatMemberStatus.CREATOR:
-            skipped += 1
             continue
         if status not in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR):
-            skipped += 1
             continue
         if status == ChatMemberStatus.ADMINISTRATOR and not member.can_be_edited:
-            skipped += 1
             continue
-
-        snapshot = await service.get_snapshot(message.chat.id, telegram_id)
-        if snapshot is None:
-            was_administrator = status == ChatMemberStatus.ADMINISTRATOR
-            permissions = (
-                _administrator_permissions(member) if was_administrator else {}
-            )
-            await service.save_snapshot(
-                message.chat.id,
-                telegram_id,
-                was_administrator=was_administrator,
-                permissions=permissions,
-            )
 
         try:
             await _promote_chat_member(
@@ -187,18 +159,14 @@ async def anon_handler(
                 message.chat.id,
                 exc_info=True,
             )
-            failed += 1
             continue
-        promoted += 1
         await cooldown_sleep(ADMIN_OPERATION_COOLDOWN_SECONDS)
-
 
 
 @router.message(Command("deanon"))
 @inject
 async def deanon_handler(
     message: Message,
-    service: FromDishka[AnonymousAdminService],
     settings: FromDishka[Settings],
     user_record: User | None = None,
 ) -> None:
@@ -219,24 +187,33 @@ async def deanon_handler(
     if not _claim_command_run(message.chat.id):
         return
 
-    restored = failed = 0
-    snapshots = await service.list_snapshots(message.chat.id)
-    for snapshot in snapshots:
+    try:
+        administrators = await _get_chat_administrators(message)
+    except TelegramAPIError:
+        logger.warning(
+            "Could not list administrators in chat %s",
+            message.chat.id,
+            exc_info=True,
+        )
+        return
+
+    for administrator in administrators:
+        if administrator.status != ChatMemberStatus.ADMINISTRATOR:
+            continue
+        if not administrator.is_anonymous or not administrator.can_be_edited:
+            continue
         try:
             await _promote_chat_member(
                 message,
-                snapshot.telegram_id,
-                **_restore_permissions(snapshot),
+                administrator.user.id,
+                **DEMOTION_PERMISSIONS,
             )
         except TelegramAPIError:
             logger.warning(
-                "Could not restore admin permissions for resident %s in chat %s",
-                snapshot.telegram_id,
+                "Could not dismiss anonymous administrator %s in chat %s",
+                administrator.user.id,
                 message.chat.id,
                 exc_info=True,
             )
-            failed += 1
             continue
-        await service.delete_snapshot(snapshot)
-        restored += 1
         await cooldown_sleep(ADMIN_OPERATION_COOLDOWN_SECONDS)

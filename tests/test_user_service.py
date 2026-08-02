@@ -17,6 +17,16 @@ async def test_ensure_user_bootstrap_resident(session, settings):
 
 
 @pytest.mark.asyncio
+async def test_list_resident_ids_excludes_other_tiers(session, settings):
+    service = UserService(session, settings)
+    await service.ensure_user(1001, "resident")
+    await service.ensure_user(2002, "member")
+    await service.set_tier(1001, 2002, UserTier.member)
+
+    assert list(await service.list_resident_ids()) == [1001]
+
+
+@pytest.mark.asyncio
 async def test_ensure_user_preserves_existing_tier(session, settings):
     service = UserService(session, settings)
 
