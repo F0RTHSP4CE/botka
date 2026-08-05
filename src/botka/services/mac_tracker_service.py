@@ -7,13 +7,18 @@ from html import escape as html_escape
 import httpx
 import jwt
 import json
+from aiogram import Bot
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from botka.config import Settings
 from botka.db.models import MacTrackerDevice, User
 from botka.services.user_service import UserService
-from aiogram import Bot
+from botka.services.visit_service import (
+    VisitService,
+    build_arrival_notification,
+    deliver_rich_message,
+)
 
 
 @dataclass(frozen=True)
@@ -418,6 +423,16 @@ async def mac_tracker_poll_loop(
                     all_ids = entered_ids | left_ids
                     user_service = UserService(session, settings)
                     user_map = await _load_user_map(user_service, all_ids)
+                    if entered_ids:
+                        # entered_ids already includes the MAC tracker's grace-period
+                        # debouncing, so transient reconnects don't notify subscribers.
+                        visit_service = VisitService(session)
+                        await _notify_visit_arrivals(
+                            bot,
+                            visit_service,
+                            entered_ids,
+                            user_map,
+                        )
                     await _notify_presence_changes(
                         bot,
                         settings,
@@ -471,6 +486,27 @@ async def _notify_presence_changes(
         disable_web_page_preview=True,
         disable_notification=True,
     )
+
+
+async def _notify_visit_arrivals(
+    bot: Bot,
+    visit_service: VisitService,
+    entered_ids: set[int],
+    user_map: dict[int, User],
+) -> None:
+    """Notify visit subscribers for users newly present after MAC debouncing."""
+    trackers_by_user = await visit_service.list_trackers_for_users(entered_ids)
+    for entered_id in sorted(entered_ids):
+        user = user_map.get(entered_id)
+        if user is None:
+            continue
+        trackers = trackers_by_user.get(entered_id, [])
+        await deliver_rich_message(
+            bot,
+            trackers,
+            build_arrival_notification(user),
+            description=f"visit arrival notification for {user.telegram_id}",
+        )
 
 
 def _format_user_label(user_id: int, user: User | None) -> str:

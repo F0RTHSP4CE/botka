@@ -32,6 +32,7 @@ from botka.services.shopping_needs_publisher import ShoppingNeedsPublisher
 from botka.services.ups_client import UpsClient
 from botka.services.user_service import UserService
 from botka.services.usbutler_service import UsbutlerService
+from botka.services.visit_service import VisitService
 
 
 class AppProvider(Provider):
@@ -61,6 +62,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def user_service(self, session: AsyncSession, settings: Settings) -> UserService:
         return UserService(session, settings)
+
+    @provide(scope=Scope.REQUEST)
+    def visit_service(self, session: AsyncSession) -> VisitService:
+        return VisitService(session)
 
     @provide(scope=Scope.REQUEST)
     def shopping_service(self, session: AsyncSession) -> ShoppingListService:

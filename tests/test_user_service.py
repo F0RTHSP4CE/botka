@@ -66,6 +66,17 @@ async def test_set_tier_creates_user_when_missing(session, settings):
 
 
 @pytest.mark.asyncio
+async def test_get_user_by_username_is_case_insensitive(session, settings):
+    service = UserService(session, settings)
+    await service.ensure_user(6006, "MixedCase")
+
+    user = await service.get_user_by_username("@mixedcase")
+
+    assert user is not None
+    assert user.telegram_id == 6006
+
+
+@pytest.mark.asyncio
 async def test_set_tier_blocks_bootstrap_downgrade(session, settings):
     service = UserService(session, settings)
 

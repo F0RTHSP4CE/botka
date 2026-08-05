@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from botka.config import Settings
@@ -24,8 +24,10 @@ class UserService:
         return await self._get_by_telegram_id(telegram_id)
 
     async def get_user_by_username(self, username: str) -> User | None:
+        """Resolve a Telegram handle case-insensitively, with or without `@`."""
+        normalized = username.removeprefix("@").lower()
         result = await self._session.execute(
-            select(User).where(User.username == username)
+            select(User).where(func.lower(User.username) == normalized)
         )
         return result.scalar_one_or_none()
 

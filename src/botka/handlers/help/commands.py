@@ -36,6 +36,11 @@ COMMANDS: tuple[CommandInfo, ...] = (
         "clear MAC assignments (residents can clear others)",
         "MAC tracker",
     ),
+    CommandInfo(
+        "visit",
+        "manage visits to F0; type /visit for more info",
+        "Visits",
+    ),
     CommandInfo("borrowed", "list borrowed items", "Borrowed items"),
     CommandInfo(
         "need", "add item to the shopping list (residents/members)", "Shopping"

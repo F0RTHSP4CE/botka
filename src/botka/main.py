@@ -32,6 +32,7 @@ from botka.handlers import (
     shopping,
     ups,
     users,
+    visit,
 )
 from botka.handlers.help.commands import get_bot_commands
 from botka.handlers.polls import answers as poll_answers
@@ -99,6 +100,7 @@ async def _run() -> None:
     dp.include_router(fridge.commands.router)
     dp.include_router(mac_tracker.commands.router)
     dp.include_router(mac_tracker.callbacks.router)
+    dp.include_router(visit.commands.router)
     dp.include_router(borrowed.commands.router)
     dp.include_router(shopping.commands.router)
     dp.include_router(meeting.commands.router)

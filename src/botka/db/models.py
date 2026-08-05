@@ -47,6 +47,27 @@ class User(Base):
     )
 
 
+class VisitTracking(Base):
+    __tablename__ = "visit_tracking"
+
+    # These are Botka's internal users.id values, not Telegram IDs.
+    tracker_user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tracked_user_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+
+
+class VisitEvent(Base):
+    __tablename__ = "visit_events"
+
+    # This is usage telemetry; visit descriptions and notification targets are
+    # deliberately not retained.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True, nullable=False
+    )
+
+
 class ShoppingItem(Base):
     __tablename__ = "shopping_items"
 
