@@ -5,14 +5,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from botka.db.models import UserTier
 from botka.handlers.visit.commands import visit_handler
 
 
-def _user(user_id: int, telegram_id: int, username: str | None):
+def _user(
+    user_id: int,
+    telegram_id: int,
+    username: str | None,
+    tier: UserTier = UserTier.member,
+):
     return SimpleNamespace(
         id=user_id,
         telegram_id=telegram_id,
         username=username,
+        tier=tier,
     )
 
 
@@ -38,11 +45,20 @@ async def _call_handler(message, args, users, visits, actor) -> None:
     )
 
 
-async def test_visit_without_arguments_sends_rich_help() -> None:
+@pytest.mark.parametrize("tier", [UserTier.resident, UserTier.member])
+async def test_visit_without_arguments_sends_rich_help_for_allowed_tiers(
+    tier: UserTier,
+) -> None:
     message = _message()
     visits = SimpleNamespace(record_event=AsyncMock())
 
-    await _call_handler(message, None, SimpleNamespace(), visits, _user(1, 10, None))
+    await _call_handler(
+        message,
+        None,
+        SimpleNamespace(),
+        visits,
+        _user(1, 10, None, tier),
+    )
 
     visits.record_event.assert_awaited_once_with(1, "help")
     rich_message = message.reply_rich.await_args.args[0]
@@ -51,6 +67,24 @@ async def test_visit_without_arguments_sends_rich_help() -> None:
     assert "To stop tracking someone, type `/visit untrack" in rich_message.markdown
     assert "* `/visit untrack @alurm`" in rich_message.markdown
     assert "* `/visit untrack 322363419`" in rich_message.markdown
+
+
+async def test_visit_rejects_guests_before_dispatch_or_event_logging() -> None:
+    message = _message()
+    visits = SimpleNamespace(record_event=AsyncMock())
+
+    await _call_handler(
+        message,
+        "at 21:00",
+        SimpleNamespace(),
+        visits,
+        _user(1, 10, "guest", UserTier.guest),
+    )
+
+    message.reply.assert_awaited_once_with("Only residents and members can use /visit.")
+    message.reply_rich.assert_not_awaited()
+    message.bot.send_message.assert_not_awaited()
+    visits.record_event.assert_not_awaited()
 
 
 async def test_visit_description_is_opaque_and_reports_partial_failure() -> None:

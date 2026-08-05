@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from botka.db.models import User, VisitEvent, VisitTracking
+from botka.db.models import User, UserTier, VisitEvent, VisitTracking
 from botka.handlers.user_links import format_user_link
 from botka.services.telegram_retry import call_with_retry_after
 
@@ -88,7 +88,10 @@ class VisitService:
                 VisitTracking,
                 User.id == VisitTracking.tracker_user_id,
             )
-            .where(VisitTracking.tracked_user_id == tracked_user_id)
+            .where(
+                VisitTracking.tracked_user_id == tracked_user_id,
+                User.tier.in_((UserTier.resident, UserTier.member)),
+            )
             .order_by(*_user_order())
         )
         return result.scalars().all()
@@ -116,7 +119,10 @@ class VisitService:
         result = await self._session.execute(
             select(VisitTracking.tracked_user_id, User)
             .join(User, User.id == VisitTracking.tracker_user_id)
-            .where(VisitTracking.tracked_user_id.in_(user_ids))
+            .where(
+                VisitTracking.tracked_user_id.in_(user_ids),
+                User.tier.in_((UserTier.resident, UserTier.member)),
+            )
             .order_by(VisitTracking.tracked_user_id, *_user_order())
         )
         trackers: defaultdict[int, list[User]] = defaultdict(list)

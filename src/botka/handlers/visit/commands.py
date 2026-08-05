@@ -9,7 +9,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import InputRichMessage, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.db.models import User
+from botka.db.models import User, UserTier
 from botka.handlers.user_links import format_user_link
 from botka.services.user_service import UserService
 from botka.services.visit_service import (
@@ -76,6 +76,9 @@ async def visit_handler(
     """Dispatch reserved subcommands and treat all other arguments as a plan."""
     if user_record is None:
         await message.reply("Could not load your user record.")
+        return
+    if user_record.tier not in (UserTier.resident, UserTier.member):
+        await message.reply("Only residents and members can use /visit.")
         return
 
     args = (command.args or "").strip()

@@ -38,7 +38,7 @@ COMMANDS: tuple[CommandInfo, ...] = (
     ),
     CommandInfo(
         "visit",
-        "manage visits to F0; type /visit for more info",
+        "manage visits to F0 (residents/members); type /visit for more info",
         "Visits",
     ),
     CommandInfo("borrowed", "list borrowed items", "Borrowed items"),
