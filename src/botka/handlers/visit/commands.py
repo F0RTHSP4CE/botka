@@ -4,27 +4,20 @@ from collections.abc import Sequence
 from typing import Literal
 
 from aiogram import Router
+from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
-from aiogram.types import (
-    InputRichBlockList,
-    InputRichBlockListItem,
-    InputRichBlockParagraph,
-    InputRichBlockSectionHeading,
-    InputRichBlockUnion,
-    InputRichMessage,
-    Message,
-)
+from aiogram.types import InputRichMessage, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
 from botka.db.models import User
+from botka.handlers.user_links import format_user_link
 from botka.services.user_service import UserService
 from botka.services.visit_service import (
     DeliveryReport,
     VisitService,
     build_cancel_notification,
     build_plan_notification,
-    deliver_rich_message,
-    rich_user_identity,
+    deliver_html_message,
 )
 
 router = Router(name=__name__)
@@ -35,12 +28,12 @@ Use `/visit` to plan your own visit or track visits of other people.
 
 ## Planning a visit
 
-Syntax: `/visit plan <description>`.
+Syntax: `/visit <description>`
 
 Examples:
 
-* `/visit plan at 21:00 to go to the resident meeting`
-* `/visit plan in 2h to drink some water (15m)`
+* `/visit at 21:00 to go to the resident meeting`
+* `/visit in 2h to drink some water (15m)`
 
 To cancel your visit, type `/visit cancel`.
 
@@ -57,12 +50,17 @@ Examples:
 
 You’ll receive a message when someone you track plans or cancels a visit. You’ll also be notified when they arrive at F0, provided they have registered a device that connects to F0’s network.
 
-To stop tracking someone, type `/visit untrack (<handle> | <numeric ID>)`, e.g. `/visit untrack @alurm` or `/visit untrack 322363419`.
+To stop tracking someone, type `/visit untrack (<handle> | <numeric ID>)`.
+
+Examples:
+
+* `/visit untrack @alurm`
+* `/visit untrack 322363419`
 
 Type `/visit trackers` to see who tracks your visits, and type `/visit tracking` to see whose visits you track.
 """
 
-# Keep each Rich Message comfortably below Telegram's block-count limit.
+# Keep HTML delivery reports comfortably below Telegram's message-length limit.
 _MAX_REPORT_USERS = 100
 
 
@@ -75,7 +73,7 @@ async def visit_handler(
     visit_service: FromDishka[VisitService],
     user_record: User | None = None,
 ) -> None:
-    """Dispatch `/visit` to its exact subcommand while leaving plan text opaque."""
+    """Dispatch reserved subcommands and treat all other arguments as a plan."""
     if user_record is None:
         await message.reply("Could not load your user record.")
         return
@@ -86,14 +84,12 @@ async def visit_handler(
         await message.reply_rich(InputRichMessage(markdown=VISIT_HELP_TEXT))
         return
 
-    # Subcommands are exact; only the remainder of `plan` is opaque user text.
+    # Commands that need arguments reserve their first word. Everything else is
+    # an opaque visit description.
     parts = args.split(maxsplit=1)
     subcommand = parts[0].lower()
     remainder = parts[1].strip() if len(parts) == 2 else ""
 
-    if subcommand == "plan":
-        await _plan(message, remainder, user_record, visit_service)
-        return
     if subcommand == "cancel" and not remainder:
         await _cancel(message, user_record, visit_service)
         return
@@ -124,7 +120,7 @@ async def visit_handler(
         await _list_tracking(message, "tracking", user_record, visit_service)
         return
 
-    await message.reply("Unknown /visit subcommand. Type /visit for more info.")
+    await _plan(message, args, user_record, visit_service)
 
 
 async def _plan(
@@ -135,7 +131,7 @@ async def _plan(
 ) -> None:
     """Record a plan call and announce it to the planner's current trackers."""
     if not description:
-        await message.reply("Usage: /visit plan <description>")
+        await message.reply("Usage: /visit <description>")
         return
     bot = message.bot
     if bot is None:
@@ -143,7 +139,7 @@ async def _plan(
         return
     await visit_service.record_event(planner.id, "plan")
     trackers = await visit_service.list_trackers(planner.id)
-    report = await deliver_rich_message(
+    report = await deliver_html_message(
         bot,
         trackers,
         build_plan_notification(planner, description),
@@ -170,7 +166,7 @@ async def _cancel(
         return
     await visit_service.record_event(planner.id, "cancel")
     trackers = await visit_service.list_trackers(planner.id)
-    report = await deliver_rich_message(
+    report = await deliver_html_message(
         bot,
         trackers,
         build_cancel_notification(planner),
@@ -212,13 +208,11 @@ async def _change_tracking(
         removed = await visit_service.untrack(actor.id, target.id)
         await visit_service.record_event(actor.id, "untrack")
         prefix = "You no longer track " if removed else "You weren’t tracking "
-    await message.reply_rich(
-        InputRichMessage(
-            blocks=[
-                InputRichBlockParagraph(text=[prefix, rich_user_identity(target), "."])
-            ],
-            skip_entity_detection=True,
-        )
+    await message.reply(
+        f"{prefix}"
+        f"{format_user_link(telegram_id=target.telegram_id, username=target.username)}.",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
     )
 
 
@@ -243,7 +237,11 @@ async def _list_tracking(
             await message.reply("You aren’t tracking anyone.")
             return
         heading = "You track visits of:"
-    await message.reply_rich(_build_user_list(heading, users))
+    await message.reply(
+        _format_user_list(heading, users),
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
 
 
 async def _resolve_target(target: str, user_service: UserService) -> User | None:
@@ -255,14 +253,12 @@ async def _resolve_target(target: str, user_service: UserService) -> User | None
     return None
 
 
-def _build_user_list(heading: str, users: Sequence[User]) -> InputRichMessage:
-    return InputRichMessage(
-        blocks=[
-            InputRichBlockParagraph(text=heading),
-            _user_list_block(users),
-        ],
-        skip_entity_detection=True,
-    )
+def _format_user_list(heading: str, users: Sequence[User]) -> str:
+    links = [
+        format_user_link(telegram_id=user.telegram_id, username=user.username)
+        for user in users
+    ]
+    return "\n".join([heading, *(f"• {link}" for link in links)])
 
 
 async def _reply_with_delivery_report(
@@ -287,49 +283,34 @@ async def _reply_with_delivery_report(
     else:
         summary = failure_text
 
-    users = [("Notified:", report.notified), ("Couldn’t notify:", report.failed)]
+    users = [("Notified", report.notified), ("Couldn’t notify", report.failed)]
     total_users = len(report.notified) + len(report.failed)
     if total_users <= _MAX_REPORT_USERS:
-        blocks: list[InputRichBlockUnion] = [InputRichBlockParagraph(text=summary)]
-        for heading, section_users in users:
+        lines = [summary]
+        for prefix, section_users in users:
             if section_users:
-                blocks.extend(
-                    [
-                        InputRichBlockSectionHeading(text=heading, size=4),
-                        _user_list_block(section_users),
-                    ]
-                )
-        await message.reply_rich(
-            InputRichMessage(blocks=blocks, skip_entity_detection=True)
+                lines.append(_format_user_report_line(prefix, section_users))
+        await message.reply(
+            "\n".join(lines),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
         )
         return
 
-    await message.reply_rich(
-        InputRichMessage(
-            blocks=[InputRichBlockParagraph(text=summary)],
-            skip_entity_detection=True,
-        )
-    )
-    for heading, section_users in users:
+    await message.reply(summary)
+    for prefix, section_users in users:
         for start in range(0, len(section_users), _MAX_REPORT_USERS):
             chunk = section_users[start : start + _MAX_REPORT_USERS]
-            await message.answer_rich(
-                InputRichMessage(
-                    blocks=[
-                        InputRichBlockSectionHeading(text=heading, size=4),
-                        _user_list_block(chunk),
-                    ],
-                    skip_entity_detection=True,
-                )
+            await message.answer(
+                _format_user_report_line(prefix, chunk),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
             )
 
 
-def _user_list_block(users: Sequence[User]) -> InputRichBlockList:
-    return InputRichBlockList(
-        items=[
-            InputRichBlockListItem(
-                blocks=[InputRichBlockParagraph(text=rich_user_identity(user))]
-            )
-            for user in users
-        ]
+def _format_user_report_line(prefix: str, users: Sequence[User]) -> str:
+    links = ", ".join(
+        format_user_link(telegram_id=user.telegram_id, username=user.username)
+        for user in users
     )
+    return f"{prefix} {links}."

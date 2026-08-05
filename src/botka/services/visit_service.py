@@ -4,20 +4,17 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from html import escape as html_escape
 from typing import Literal
 
 from aiogram import Bot
-from aiogram.types import (
-    InputRichBlockParagraph,
-    InputRichMessage,
-    RichTextMention,
-    RichTextUrl,
-)
+from aiogram.enums import ParseMode
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from botka.db.models import User, VisitEvent, VisitTracking
+from botka.handlers.user_links import format_user_link
 from botka.services.telegram_retry import call_with_retry_after
 
 logger = logging.getLogger(__name__)
@@ -31,7 +28,6 @@ type VisitAction = Literal[
     "trackers",
     "tracking",
 ]
-type RichUserIdentity = RichTextMention | RichTextUrl
 
 
 @dataclass(slots=True)
@@ -134,60 +130,32 @@ class VisitService:
         await self._session.commit()
 
 
-def rich_user_identity(user: User) -> RichUserIdentity:
-    """Build a rich handle mention, falling back to a linked numeric ID."""
-    if user.username:
-        username = user.username.removeprefix("@")
-        return RichTextMention(text=f"@{username}", username=username)
-    return RichTextUrl(
-        text=str(user.telegram_id),
-        url=f"tg://user?id={user.telegram_id}",
+def _user_link(user: User) -> str:
+    return format_user_link(
+        telegram_id=user.telegram_id,
+        username=user.username,
     )
 
 
-def build_plan_notification(user: User, description: str) -> InputRichMessage:
-    """Build a plan notification with the free-form description as plain text."""
-    return InputRichMessage(
-        blocks=[
-            InputRichBlockParagraph(
-                text=[rich_user_identity(user), " plans to visit F0:"]
-            ),
-            # Structured rich-text strings are plain text. User input is not parsed
-            # as HTML or Markdown.
-            InputRichBlockParagraph(text=description),
-        ],
-        skip_entity_detection=True,
-    )
+def build_plan_notification(user: User, description: str) -> str:
+    """Build an HTML notification with an escaped free-form description."""
+    return f"{_user_link(user)} plans to visit F0: {html_escape(description)}"
 
 
-def build_cancel_notification(user: User) -> InputRichMessage:
+def build_cancel_notification(user: User) -> str:
     """Build a visit-cancellation notification for one planner."""
-    return InputRichMessage(
-        blocks=[
-            InputRichBlockParagraph(
-                text=[rich_user_identity(user), " canceled their visit."]
-            )
-        ],
-        skip_entity_detection=True,
-    )
+    return f"{_user_link(user)} canceled their visit."
 
 
-def build_arrival_notification(user: User) -> InputRichMessage:
+def build_arrival_notification(user: User) -> str:
     """Build the notification emitted when MAC tracking detects an arrival."""
-    return InputRichMessage(
-        blocks=[
-            InputRichBlockParagraph(
-                text=[rich_user_identity(user), " has arrived at F0."]
-            )
-        ],
-        skip_entity_detection=True,
-    )
+    return f"{_user_link(user)} has arrived at F0."
 
 
-async def deliver_rich_message(
+async def deliver_html_message(
     bot: Bot,
     recipients: Sequence[User],
-    rich_message: InputRichMessage,
+    text: str,
     *,
     description: str,
 ) -> DeliveryReport:
@@ -196,9 +164,11 @@ async def deliver_rich_message(
     for recipient in recipients:
         try:
             await call_with_retry_after(
-                lambda recipient=recipient: bot.send_rich_message(
+                lambda recipient=recipient: bot.send_message(
                     chat_id=recipient.telegram_id,
-                    rich_message=rich_message,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
                 ),
                 description=f"{description} to {recipient.telegram_id}",
             )

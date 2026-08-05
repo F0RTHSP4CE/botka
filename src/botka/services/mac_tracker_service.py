@@ -17,7 +17,7 @@ from botka.services.user_service import UserService
 from botka.services.visit_service import (
     VisitService,
     build_arrival_notification,
-    deliver_rich_message,
+    deliver_html_message,
 )
 
 
@@ -501,7 +501,7 @@ async def _notify_visit_arrivals(
         if user is None:
             continue
         trackers = trackers_by_user.get(entered_id, [])
-        await deliver_rich_message(
+        await deliver_html_message(
             bot,
             trackers,
             build_arrival_notification(user),
@@ -519,9 +519,7 @@ def _format_user_label(user_id: int, user: User | None) -> str:
     else:
         href = f"tg://user?id={user.telegram_id}"
         display = str(user.telegram_id)
-    return (
-        f'<a href="{html_escape(href, quote=True)}">' f"{html_escape(display)}" "</a>"
-    )
+    return f'<a href="{html_escape(href, quote=True)}">{html_escape(display)}</a>'
 
 
 async def _load_user_map(
