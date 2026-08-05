@@ -4,17 +4,21 @@ RUN apt update && apt install -y --no-install-recommends \
 	sqlite3 \
 	&& rm -rf /var/lib/apt/lists/*
 
-# Enable BuildKit cache mounts for uv
-# syntax=docker/dockerfile:1.7-labs
-
 WORKDIR /app
 
-COPY pyproject.toml README.md /app/
+ENV UV_CACHE_DIR=/root/.cache/uv
+ENV UV_LINK_MODE=copy
+ENV PATH="/app/.venv/bin:$PATH"
+
+COPY pyproject.toml uv.lock README.md /app/
+
+# Cache downloaded packages separately from the frequently changing source.
+RUN --mount=type=cache,target=/root/.cache/uv \
+	uv sync --locked --no-install-project
+
 COPY src /app/src
 
-ENV UV_CACHE_DIR=/root/.cache/uv
-
 RUN --mount=type=cache,target=/root/.cache/uv \
-	uv pip install --system .
+	uv sync --locked --no-editable
 
 CMD ["botka"]
