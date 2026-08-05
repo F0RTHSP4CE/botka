@@ -10,12 +10,12 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from botka.config import Settings
-from botka.db.models import User
+from botka.db.models import User, UserTier
 from botka.handlers.refinance.callbacks import (
     invoice_pay_callback,
     invoice_review_callback,
 )
-from botka.handlers.refinance.commands import _build_balance_message
+from botka.handlers.refinance.commands import _build_balance_message, balance_handler
 from botka.handlers.refinance.invoice_ui import (
     affordable_currencies,
     build_payment_view,
@@ -229,10 +229,98 @@ async def test_own_balance_has_a_payment_button_for_every_pending_invoice() -> N
     assert labels == [f"Pay invoice #{invoice_id}" for invoice_id in range(1, 7)]
     assert "#6" in text
 
-    _, other_keyboard = await _build_balance_message(
-        refinance, entity, 1001, viewing_other=True
+
+@pytest.mark.asyncio
+async def test_balance_rejects_guest_viewing_another_user() -> None:
+    message = MagicMock(spec=Message)
+    message.from_user = SimpleNamespace(id=1001, username="alice")
+    message.reply = AsyncMock()
+    refinance = SimpleNamespace(
+        is_configured=True,
+        get_or_link_entity=AsyncMock(),
     )
-    assert other_keyboard is None
+    user_service = SimpleNamespace(
+        get_user_by_username=AsyncMock(),
+    )
+
+    await balance_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(args="@bob"),
+        refinance,
+        user_service,
+        user_record=SimpleNamespace(tier=UserTier.guest),
+    )
+
+    message.reply.assert_awaited_once_with(
+        "Only residents and members can view other users' balances."
+    )
+    user_service.get_user_by_username.assert_not_awaited()
+    refinance.get_or_link_entity.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewer_tier", [UserTier.member, UserTier.resident])
+async def test_balance_allows_member_or_resident_to_view_another_user(
+    viewer_tier: UserTier,
+) -> None:
+    message = MagicMock(spec=Message)
+    message.from_user = SimpleNamespace(id=1001, username="alice")
+    message.reply = AsyncMock()
+    refinance = SimpleNamespace(
+        is_configured=True,
+        get_or_link_entity=AsyncMock(return_value={"id": 200, "name": "bob"}),
+        get_balance=AsyncMock(return_value={"completed": {"usd": "10"}}),
+        get_invoices=AsyncMock(return_value=[]),
+        get_transactions=AsyncMock(return_value=[]),
+    )
+    user_service = SimpleNamespace(
+        get_user_by_username=AsyncMock(
+            return_value=SimpleNamespace(
+                telegram_id=2002,
+                username="bob",
+                tier=UserTier.guest,
+            )
+        )
+    )
+
+    await balance_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(args="@bob"),
+        refinance,
+        user_service,
+        user_record=SimpleNamespace(tier=viewer_tier),
+    )
+
+    message.reply.assert_awaited_once()
+    assert "bob" in message.reply.await_args.args[0]
+    assert "10.00 USD" in message.reply.await_args.args[0]
+    assert message.reply.await_args.kwargs["reply_markup"] is None
+
+
+@pytest.mark.asyncio
+async def test_balance_allows_guest_to_view_own_linked_entity() -> None:
+    message = MagicMock(spec=Message)
+    message.from_user = SimpleNamespace(id=1001, username="alice")
+    message.reply = AsyncMock()
+    refinance = SimpleNamespace(
+        is_configured=True,
+        get_or_link_entity=AsyncMock(return_value={"id": 200, "name": "alice"}),
+        get_balance=AsyncMock(return_value={"completed": {"usd": "10"}}),
+        get_invoices=AsyncMock(return_value=[]),
+        get_transactions=AsyncMock(return_value=[]),
+    )
+
+    await balance_handler.__dishka_orig_func__(
+        message,
+        SimpleNamespace(args=None),
+        refinance,
+        SimpleNamespace(),
+        user_record=SimpleNamespace(tier=UserTier.guest),
+    )
+
+    refinance.get_or_link_entity.assert_awaited_once_with(1001, "alice")
+    message.reply.assert_awaited_once()
+    assert "10.00 USD" in message.reply.await_args.args[0]
 
 
 @pytest.mark.asyncio

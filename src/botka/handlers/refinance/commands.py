@@ -20,7 +20,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from dishka.integrations.aiogram import FromDishka, inject
 
-from botka.handlers.menu import Btn, send_main_menu
+from botka.db.models import User, UserTier
+from botka.handlers.menu import Btn
 from botka.handlers.refinance.dialogs import start_deposit_dialog
 from botka.handlers.refinance.invoice_ui import build_payment_view
 from botka.services.refinance_client import RefinanceClient
@@ -195,7 +196,9 @@ async def transfer_handler(
         actor_entity, target_entity = await asyncio.gather(
             _resolve_self(refinance, message.from_user.id, message.from_user.username),
             _resolve_target_by_telegram_id(
-                refinance, reply_user.id, reply_user.username  # type: ignore[union-attr]
+                refinance,
+                reply_user.id,
+                reply_user.username,  # type: ignore[union-attr]
             ),
         )
         target_label = (
@@ -311,7 +314,9 @@ async def request_handler(
         actor_entity, payer_entity = await asyncio.gather(
             _resolve_self(refinance, message.from_user.id, message.from_user.username),
             _resolve_target_by_telegram_id(
-                refinance, reply_user.id, reply_user.username  # type: ignore[union-attr]
+                refinance,
+                reply_user.id,
+                reply_user.username,  # type: ignore[union-attr]
             ),
         )
         payer_label = (
@@ -515,6 +520,7 @@ async def balance_handler(
     command: CommandObject,
     refinance: FromDishka[RefinanceClient],
     user_service: FromDishka[UserService],
+    user_record: User | None = None,
 ) -> None:
     if message.from_user is None:
         await message.reply("Cannot determine sender.")
@@ -527,6 +533,12 @@ async def balance_handler(
     viewing_other = False
 
     if args and args[0].startswith("@"):
+        viewer_tier = user_record.tier if user_record else UserTier.guest
+        if viewer_tier not in (UserTier.resident, UserTier.member):
+            await message.reply(
+                "Only residents and members can view other users' balances."
+            )
+            return
         entity = await _resolve_target_by_username(refinance, user_service, args[0])
         if entity is None:
             await message.reply(f"User {html.escape(args[0])} not found in refinance.")
