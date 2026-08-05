@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape as html_escape
+
 from aiogram import Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
@@ -76,13 +77,19 @@ async def user_handler(
     if len(args) not in (1, 2):
         await message.reply(
             html_escape(
-                "Usage: /user [<resident|member|guest> [<telegram_id>]] (or reply to a user message)"
+                "Usage: /user [<resident|member|guest> [<telegram_id|@username>]] (or reply to a user message)"
             )
         )
         return
 
+    tier_raw = args[0]
+    try:
+        tier = UserTier(tier_raw)
+    except ValueError:
+        await message.reply("Tier must be resident, member, or guest.")
+        return
+
     if len(args) == 1:
-        tier_raw = args[0]
         reply_user = _get_explicit_reply_user(message)
         if reply_user is not None:
             target_id = reply_user.id
@@ -92,18 +99,22 @@ async def user_handler(
             await message.reply("Cannot determine target user.")
             return
     else:
-        tier_raw, target_id_raw = args
-        try:
-            target_id = int(target_id_raw)
-        except ValueError:
-            await message.reply("Invalid telegram id.")
-            return
+        target_text = args[1]
+        if target_text.startswith("@") and len(target_text) > 1:
+            target_user = await user_service.get_user_by_username(target_text)
+            if target_user is None:
+                await message.reply(
+                    "User not found. They need to have interacted with Botka first."
+                )
+                return
+            target_id = target_user.telegram_id
+        else:
+            try:
+                target_id = int(target_text)
+            except ValueError:
+                await message.reply("Invalid Telegram ID or handle.")
+                return
 
-    try:
-        tier = UserTier(tier_raw)
-    except ValueError:
-        await message.reply("Tier must be resident, member, or guest.")
-        return
     if user_service.is_bootstrap_resident(target_id) and tier != UserTier.resident:
         await message.reply("Bootstrapped user tiers cannot be changed.")
         return
@@ -117,6 +128,6 @@ async def user_handler(
         username=target_user.username if target_user else None,
     )
     await message.reply(
-        "Tier updated: {} is now a {}.".format(target_label, tier.value),
+        f"Tier updated: {target_label} is now a {tier.value}.",
         disable_web_page_preview=True,
     )
