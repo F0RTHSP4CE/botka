@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -587,8 +587,17 @@ async def test_invoice_polling_notifies_once_and_persists_receipt(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "has_traceback"),
+    [
+        (TelegramBadRequest(method=MagicMock(), message="chat not found"), False),
+        (TelegramForbiddenError(method=MagicMock(), message="bot was blocked by the user"), False),
+        (RuntimeError("unexpected failure"), True),
+    ],
+)
 async def test_failed_invoice_notification_is_retried(
-    engine, monkeypatch: pytest.MonkeyPatch
+    engine, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    error: Exception, has_traceback: bool,
 ) -> None:
     await add_local_user(engine)
     fake_client = SimpleNamespace(
@@ -599,7 +608,7 @@ async def test_failed_invoice_notification_is_retried(
     monkeypatch.setattr(invoice_job, "RefinanceClient", lambda settings: fake_client)
     bot = SimpleNamespace(
         send_message=AsyncMock(
-            side_effect=[RuntimeError("blocked"), SimpleNamespace(message_id=88)]
+            side_effect=[error, SimpleNamespace(message_id=88)]
         )
     )
     settings = Settings(
@@ -620,6 +629,11 @@ async def test_failed_invoice_notification_is_retried(
     await invoice_job.notify_refinance_invoices(context)
 
     assert bot.send_message.await_count == 2
+    record = next(record for record in caplog.records if "Failed to notify" in record.message)
+    assert (record.exc_info is not None) is has_traceback
+    assert "user 1001 about invoice 123" in record.message
+    if not has_traceback:
+        assert str(error) in record.message
 
 
 @pytest.mark.asyncio

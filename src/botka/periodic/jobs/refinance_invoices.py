@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from sqlalchemy import select
 
 from botka.db.models import User
@@ -82,6 +83,14 @@ async def notify_refinance_invoices(context: PeriodicContext) -> None:
                         reply_markup=notification_keyboard(invoice, telegram_id),
                         disable_web_page_preview=True,
                     )
+                except (TelegramBadRequest, TelegramForbiddenError) as exc:
+                    logger.error(
+                        "Failed to notify Telegram user %s about invoice %s: %s",
+                        telegram_id,
+                        invoice_id,
+                        exc,
+                    )
+                    continue
                 except Exception:
                     logger.exception(
                         "Failed to notify Telegram user %s about invoice %s",
